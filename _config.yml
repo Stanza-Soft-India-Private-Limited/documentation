@@ -1,16 +1,22 @@
 title: Technical Documentation
-description: End to End documentation of backend.
+description: End to End documentation of backend
 remote_theme: just-the-docs/just-the-docs
 
-# Enable search
+# Search
 search_enabled: true
+search:
+  button: true
 
 # Color scheme
 color_scheme: dark
-
 
 # Navigation
 nav_enabled: true
 
 # Footer
-footer_content: "Copyright &copy; 2025 Stanza Soft"
+footer_content: "Copyright &copy; 2025 Stanza Soft India Private Limited"
+
+# Aux links (optional - top right corner)
+aux_links:
+  "View on GitHub":
+    - "https://github.com/Stanza-Soft-India-Private-Limited/documentation"
