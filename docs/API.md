@@ -1,4 +1,10 @@
-# API Reference Documentation
+---
+layout: default
+title: API Documentation
+nav_order: 2
+---
+
+# API Documentation
 
 ## Overview
 
@@ -87,6 +93,7 @@ Exchange OAuth provider tokens from AWS Cognito for custom backend JWT tokens.
 ```
 
 **Field Descriptions:**
+
 - `idToken` (required): Cognito ID token from OAuth provider
 - `accessToken` (required): Cognito access token from OAuth provider
 - `refreshToken` (required): Cognito refresh token from OAuth provider
@@ -1091,6 +1098,7 @@ Get the current processing status of a video from Mux.
 ```
 
 **Status Values:**
+
 - `UPLOADING` - Video is being uploaded
 - `PROCESSING` - Video is being processed by Mux
 - `READY` - Video is ready for playback

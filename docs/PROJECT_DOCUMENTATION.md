@@ -1,3 +1,9 @@
+---
+layout: default
+title: Project Documentation
+nav_order: 4
+---
+
 # UPSC Exam Preparation Platform - Product Documentation
 
 **Last Updated:** October 10, 2025

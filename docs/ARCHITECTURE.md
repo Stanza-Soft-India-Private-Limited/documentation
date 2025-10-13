@@ -1,10 +1,17 @@
-# System Architecture
+---
+layout: default
+title: Architecture
+nav_order: 3
+---
+
+# Architecture
 
 **Last Updated:** October 10, 2025
 
 ---
 
 ## Table of Contents
+
 - [High-Level Architecture](#high-level-architecture)
 - [Project Structure](#project-structure)
 - [Module Organization](#module-organization)
@@ -230,14 +237,14 @@ src/
 
 ### Key Directories Explained
 
-| Directory | Purpose | When to Use |
-|-----------|---------|-------------|
-| `modules/` | Feature-specific code organized by domain | Adding new features |
-| `graph/` | Neo4j graph database layer (progress tracking) | Graph queries and relationships |
-| `neo4j/` | Low-level Neo4j driver wrapper | Direct database operations |
-| `common/` | Shared utilities, decorators, guards | Cross-cutting concerns |
-| `config/` | Environment-based configuration | Adding new config values |
-| `generated/` | Prisma-generated code | Never edit manually |
+| Directory    | Purpose                                        | When to Use                     |
+| ------------ | ---------------------------------------------- | ------------------------------- |
+| `modules/`   | Feature-specific code organized by domain      | Adding new features             |
+| `graph/`     | Neo4j graph database layer (progress tracking) | Graph queries and relationships |
+| `neo4j/`     | Low-level Neo4j driver wrapper                 | Direct database operations      |
+| `common/`    | Shared utilities, decorators, guards           | Cross-cutting concerns          |
+| `config/`    | Environment-based configuration                | Adding new config values        |
+| `generated/` | Prisma-generated code                          | Never edit manually             |
 
 ---
 
@@ -472,6 +479,7 @@ async getUserProgress(userId: string) {
 ```
 
 **Benefits:**
+
 - Testable (mock repositories)
 - Reusable queries
 - Clear separation of concerns
@@ -500,6 +508,7 @@ export class CreatePYQPaperDto {
 ```
 
 **Benefits:**
+
 - Type safety
 - Automatic validation
 - Swagger documentation
@@ -513,13 +522,14 @@ export class CreatePYQPaperDto {
 @Injectable()
 export class PyqService {
   constructor(
-    private readonly prisma: PrismaService,      // Injected
+    private readonly prisma: PrismaService, // Injected
     private readonly cacheService: CacheService, // Injected
   ) {}
 }
 ```
 
 **Benefits:**
+
 - Easy to mock in tests
 - No tight coupling to implementations
 - Framework manages lifecycle
@@ -538,6 +548,7 @@ async deleteProfile(@Param('id') id: string) {
 ```
 
 **Benefits:**
+
 - Declarative security
 - Reusable across endpoints
 - Clear authorization rules
@@ -555,6 +566,7 @@ async findAll() {
 ```
 
 **Use Cases:**
+
 - Response caching
 - Performance monitoring
 - Logging
@@ -600,12 +612,14 @@ interface PaginatedResult<T> {
 ### Horizontal Scaling
 
 **Current Architecture Supports:**
+
 - ✅ Stateless API servers (JWT-based auth, no server sessions)
 - ✅ Database connection pooling
 - ✅ Redis for shared session storage
 - ✅ Docker containerization ready
 
 **To Scale:**
+
 1. Deploy multiple API server instances behind load balancer
 2. Each instance connects to same PostgreSQL, Neo4j, and Redis
 3. AWS ALB already configured: `http://upsc-alb-590268270.ap-south-1.elb.amazonaws.com`
@@ -613,16 +627,19 @@ interface PaginatedResult<T> {
 ### Database Scaling
 
 **PostgreSQL:**
+
 - Read replicas for read-heavy operations
 - Connection pooling (configured in Prisma)
 - Indexes on frequently queried columns
 
 **Neo4j:**
+
 - Causal clustering for high availability
 - Read replicas for recommendation queries
 - Current: Single instance (sufficient for MVP)
 
 **Redis:**
+
 - Redis Cluster for high availability
 - Separate instances for cache vs. queue
 - Current: Single instance
@@ -630,12 +647,14 @@ interface PaginatedResult<T> {
 ### Performance Optimizations
 
 **Implemented:**
+
 - Response caching (60s TTL)
 - GZIP compression
 - Pagination on all list endpoints
 - Database query optimization with indexes
 
 **Future Improvements:**
+
 - CDN for static assets
 - Database query result caching
 - GraphQL for flexible data fetching
@@ -687,6 +706,7 @@ interface PaginatedResult<T> {
 ## Monitoring Strategy
 
 ### Health Checks
+
 ```
 /api/v1/health           → Overall system health
 /api/v1/health/db        → PostgreSQL connectivity
@@ -695,10 +715,12 @@ interface PaginatedResult<T> {
 ```
 
 ### Logging Levels
+
 - **Development:** error, warn, log
 - **Production:** error, warn only
 
 ### Performance Metrics
+
 - Request duration (via PerformanceInterceptor)
 - Database query times
 - Cache hit rates
