@@ -1,0 +1,12 @@
+title: Technical Documentation
+description: Project documentation
+remote_theme: just-the-docs/just-the-docs
+
+# Enable search
+search_enabled: true
+
+# Color scheme
+color_scheme: dark
+
+# Footer
+footer_content: "Copyright &copy; 2025 Stanza Soft"
