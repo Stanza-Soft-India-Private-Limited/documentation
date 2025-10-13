@@ -4,6 +4,6 @@ Welcome to our technical documentation.
 
 ## Available Documentation
 
-- [Project Documentation](docs/PROJECT_DOCUMENTATION.md)
-- [API Documentation](docs/API.md)
-- [Architecture](docs/ARCHITECTURE.md)
+- [API Documentation](API.md)
+- [Architecture](ARCHITECTURE.md)
+- [Project Documentation](PROJECT_DOCUMENTATION.md)
