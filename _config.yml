@@ -1,5 +1,5 @@
 title: Technical Documentation
-description: Project documentation
+description: End to End documentation of backend.
 remote_theme: just-the-docs/just-the-docs
 
 # Enable search
@@ -7,6 +7,10 @@ search_enabled: true
 
 # Color scheme
 color_scheme: dark
+
+
+# Navigation
+nav_enabled: true
 
 # Footer
 footer_content: "Copyright &copy; 2025 Stanza Soft"
