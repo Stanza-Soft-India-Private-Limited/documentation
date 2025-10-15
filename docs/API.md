@@ -13,7 +13,7 @@ This document provides a comprehensive reference for all API endpoints available
 ### Base URLs
 
 - **Local Development**: `http://localhost:3000/api/v1`
-- **Production**: `http://upsc-alb-590268270.ap-south-1.elb.amazonaws.com/api/v1`
+- **Production**: `https://app.stanzasoft.ai/api/v1`
 
 ### Authentication
 
