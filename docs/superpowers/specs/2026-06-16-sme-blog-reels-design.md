@@ -40,7 +40,7 @@ In the existing **reel management list/detail**:
 Do **not** build a standalone "Blogs" navigation entry. Blogs live where their
 reel lives. This mirrors the app, where the blog is reached from the reel.
 
-## Endpoints (see SME_PORTAL_API.md for full payloads)
+## Endpoints (see docs/sme/SME_PORTAL_API.md for full payloads)
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -57,5 +57,5 @@ the SME portal continues to use them for video management.
 ## Markdown format
 
 Same content/image/quiz markdown the content-doc handoff uses (see
-`CONTENT_DOC_SME_API.md`). For blogs, quiz blocks are accepted but stripped — only
+`docs/sme/CONTENT_DOC_SME_API.md`). For blogs, quiz blocks are accepted but stripped — only
 content + image blocks render.
