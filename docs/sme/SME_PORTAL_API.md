@@ -205,11 +205,19 @@ GET /sme/orders/:id
 with `status=PAID` but `premiumGrantedAt=null` is a payment that never granted premium →
 grant it via §1.6 (the Razorpay webhook now also auto-grants, so new ones self-heal).
 
-### 2.4 Webhook events
+### 2.4 Webhook / provider events
 ```
-GET /sme/webhooks?page=&limit=&startDate=&endDate=&search=
+GET /sme/webhooks?page=&limit=&source=&startDate=&endDate=&search=
 ```
-Raw Razorpay/Apple webhook events for debugging stuck payments.
+Provider event ledger from `payment_events` — **Razorpay webhooks + Apple App Store
+notifications**. Filter `source=RAZORPAY|APPLE` (omit for both; `MANUAL` = empty). Keeps
+the original keys (`eventId`, `eventType`, `source`, `payload`, `processedAt`) and adds
+`provider`, `kind`, `result`, `error`, `userId`, `orderId`, `receivedAt`.
+
+> ⚠️ This endpoint used to read a legacy table that was never written, so it returned an
+> empty list. It now returns real events — **additive/non-breaking** (same keys, plus new
+> ones). Full Apple detail (notification types, lifecycle, field reference) is in
+> [SME_APPLE_IAP_API.md](./SME_APPLE_IAP_API.md).
 
 ---
 
