@@ -149,19 +149,32 @@ time). For very large cohorts this can take a while — set a generous client ti
 the app routes via `DeepLinkMapper.fromData`. **Only these values route** — anything
 else lands on **Home**:
 
-| `type` | needs `id` | opens |
-|---|---|---|
-| `home` (default) | — | Home / dashboard |
-| `daily_task` | — | Daily tasks |
-| `chat` | — | Chat |
-| `mains_question` | ✅ | that Mains question detail |
-| `reel` | optional | a specific reel (with `id`) or the Reels feed (without) |
+| `type` | needs `id` | opens | universal link |
+|---|---|---|---|
+| `home` (default) | — | Home / dashboard | `/open/home` |
+| `daily_task` | — | Daily tasks (Home) | — |
+| `chat` | — | Chat | `/open/chat` |
+| `chat_expert` | — | Chat, **Expert (SME) mode** preselected | `/open/chat/expert` |
+| `mains` | — | PYQ tab → **Mains** landing | `/open/mains` |
+| `mains_question` | ✅ | that Mains question detail | `/open/mains/<id>` |
+| `reel` | optional | a specific reel (with `id`) or the Reels feed | `/open/reel[/<id>]` |
+| `reelblog` | ✅ | that reel's blog article | `/open/reelblog/<id>` |
+| `pyq` | — | PYQ / Practice tab | `/open/pyq` |
+| `pyq_question` | ✅ | a specific PYQ question | `/open/pyq/<id>` |
+| `simulation` | ✅ | Library → Simulation, highlighted | `/open/simulation/<id>` |
+| `doc` | ✅ | a study document | `/open/doc/<id>` |
+| `library` | — | Library / My Content | `/open/library` |
+| `flashcards` | — | Flashcards | `/open/flashcards` |
+| `mnemonics` | — | Mnemonics | `/open/mnemonics` |
+| `saved` | — | Saved questions | `/open/saved` |
+| `premium` | — | Upgrade / Premium screen | `/open/premium` |
 
-⚠️ **This is a smaller set than the `/open/...` web/universal links.** A *push* cannot
-deep-link to a content doc, PYQ question, simulation, etc. — those types fall back to
-Home. If you need a richer target, send `type:"home"` and reference it in the body, or
-request a new push `type` be added server-side (one line in `DeepLinkMapper`, no app
-release needed only if the target already exists as a `DeepLinkTarget`).
+Anything not in this table falls back to **Home**. `type` is a free string on the send
+API (no backend change to use a new one). ⚠️ The `chat_expert`, `mains`, and the parity
+types (`pyq`/`doc`/`simulation`/`library`/`premium`/…) route only on **app builds ≥ the
+release that shipped them** — older installs fall back to Home for those *push* types
+(universal links degrade more gracefully). Adding a brand-new target that isn't an
+existing app screen still needs an app release.
 
 ---
 
