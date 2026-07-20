@@ -26,7 +26,7 @@ x-api-key: <API_KEY_SECRET>
 
 Users originate from Cognito OAuth (Google/Apple) + onboarding, so there is **no
 "create user"** endpoint. SME can list, view, edit (name/status), deactivate, delete,
-grant/revoke premium, and notify.
+grant/revoke premium, extend a free trial, and notify.
 
 ### 1.1 List users
 ```
@@ -62,7 +62,9 @@ GET /sme/users?page=1&limit=20&search=&status=&premium=&onboarded=&platform=
       "subscriptionSource": "RAZORPAY",
       "onboardingCompleted": true,
       "lastLoginAt": "2026-06-15T09:12:00.000Z",
-      "createdAt": "2026-01-10T00:00:00.000Z"
+      "createdAt": "2026-01-10T00:00:00.000Z",
+      "trialEndsAt": null,
+      "trialDaysLeft": null
     }
   ],
   "total": 969,
@@ -73,15 +75,23 @@ GET /sme/users?page=1&limit=20&search=&status=&premium=&onboarded=&platform=
 ```
 `premiumState` is a derived funnel label: `Premium` / `Trial` / `Trial Ended` /
 `Churned` / `Downloaded` (computed from live subscription state, not the raw column).
+`Trial` is also reachable for a previously-`Churned` user while an SME trial
+extension is active (§1.8) — they fall back to `Churned` once the extension lapses.
+
+`trialEndsAt` (ISO string) / `trialDaysLeft` (int, rounded up) are populated **only**
+while the user is currently in an active trial — `status=ACTIVE` and now before the
+trial end — whether that's the default 14-day window or an SME-extended one. Both
+are `null` for every other state (premium, trial ended, churned, never onboarded).
 
 ### 1.2 Get a user
 ```
 GET /sme/users/:id
 ```
-**Response 200:** all summary fields plus:
+**Response 200:** all summary fields (including `trialEndsAt` / `trialDaysLeft`, §1.1) plus:
 ```json
 {
   "...": "summary fields above",
+  "trialExtended": true,
   "profile": { "aspirantType": "FULL_TIME", "attempt_year": 2027, "onboardingCompleted": true, "...": "full UserProfile" },
   "platforms": ["android", "web"],
   "recentOrders": [
@@ -94,6 +104,12 @@ GET /sme/users/:id
   ]
 }
 ```
+`trialExtended` (boolean) is `true` when an SME trial extension (§1.8) is currently
+in effect for this user — i.e. the underlying `trialEndsAt` column is set and still
+in the future. This is distinct from `trialDaysLeft != null`, which is also true for
+a user riding out the default (never-extended) 14-day window; `trialExtended` tells
+the portal specifically "an SME granted extra time here."
+
 `404` if the user doesn't exist.
 
 ### 1.3 Update a user (name / status only)
@@ -151,7 +167,56 @@ DELETE /sme/users/:id/premium
 Force-expires premium now: `status=UNSUBSCRIBED`, `premiumExpiresAt=now`, Neo4j tier→free,
 Wylto→Churned. Response: `{ "success": true, "expiredAt": "2026-06-16T…" }`.
 
-### 1.8 Notify a single user
+### 1.8 Extend trial
+```
+POST /sme/users/:id/trial-extension
+{ "days": 14, "reason": "Escalated support ticket #4821 — gave 2 extra weeks" }
+```
+| Field | Required | Description |
+|---|---|---|
+| days | yes | integer, 1–365 |
+| reason | no | free text, ≤200 chars — **not** shown to the user, stored only on the `sme_audit_log` row (`TRIAL_EXTEND`) |
+
+**Semantics:**
+- Adds `days` on top of `max(now, current trial end)` — i.e. it always extends
+  forward from "whichever is later: right now, or the trial end already in
+  effect." It never rewinds an end date, and back-to-back calls **stack**: there
+  is no lifetime cap, every call is independently audited.
+- Works for a user who is: **currently in-trial** (just pushes the end further
+  out), **trial-expired** (never paid, window closed), or **churned**
+  (previously paid, now lapsed). For the latter two, the user is **revived** —
+  `status` flips back to `ACTIVE` — and they get **full premium access** until
+  the new trial end, exactly like being freshly inside the 14-day window.
+- Sends **no push notification** — see "Recommended portal UX" below.
+- **400** if the user currently has an **active paid subscription**
+  (`status=SUBSCRIBED` and not expired) — use §1.6 Grant premium instead.
+- **400** if the user is `SUSPENDED`, `LOCKED`, `ONBOARDING`, or `INACTIVE`
+  (non-standard lifecycle states — reactivate/onboard them first).
+- **404** if the user doesn't exist.
+
+**Response 200:**
+```json
+{
+  "success": true,
+  "trialEndsAt": "2026-08-15T10:30:00.000Z",
+  "trialDaysLeft": 26,
+  "statusChanged": true,
+  "previousTrialEndsAt": "2026-07-06T10:30:00.000Z"
+}
+```
+`statusChanged` is `true` when the call revived a lapsed/churned user (`status`
+went to `ACTIVE`); `false` when it just extended an already-active trial.
+`previousTrialEndsAt` is the trial end that was in effect right before this call
+(useful for an undo/audit UI).
+
+> **Recommended portal UX:** pair the "Extend trial" action with a **"Notify
+> user"** button that calls §1.9 (`POST /sme/users/:id/notify`) right after a
+> successful extension. The backend deliberately does **not** push a
+> notification on extension — the portal owns the messaging (wording, timing,
+> whether to notify at all), so wire the two actions together in the UI rather
+> than assuming the user was told.
+
+### 1.9 Notify a single user
 ```
 POST /sme/users/:id/notify
 { "title": "…", "body": "…", "type": "home", "id": "optional-entity-id" }
@@ -255,7 +320,7 @@ content/image/quiz syntax from `CONTENT_DOC_SME_API.md` (quiz blocks are strippe
 > (topic subscription vs segment query), and all delivery caveats. The summary below is
 > the quick reference.
 
-Single-user notify lives at §1.8. These are the audience sends.
+Single-user notify lives at §1.9. These are the audience sends.
 
 ### 4.1 Broadcast to all
 ```
@@ -312,5 +377,6 @@ endpoints reuse the same parser as the existing live blog admin, so output is id
 ## Audit trail
 
 Every privileged/destructive SME action (update, deactivate, hard-delete, premium
-grant/revoke, notify, blog create/update/delete) is recorded in `sme_audit_log`
-(action, target user, before/after snapshot, optional reference, timestamp).
+grant/revoke, trial extend, notify, blog create/update/delete) is recorded in
+`sme_audit_log` (action, target user, before/after snapshot, optional reference,
+timestamp).
