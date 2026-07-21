@@ -21,6 +21,20 @@ the default. The merged result is served to the apps on the public `GET /mains/f
 and `GET /pyq/filters` endpoints (new `subjectsMeta` field), so the portal never has to
 touch the apps.
 
+**Mains "Optional" subjects — what `isOptional` means:** UPSC Mains has two kinds of
+papers — the **GS papers** everyone writes (GS Paper 1–4) and **Optional-subject papers**
+(Sociology, PSIR, Law, …; each aspirant picks one). Every mains question row carries an
+`isOptional` flag for this. In the app, the Mains screen has an **"Optional" switch**
+that re-scopes the whole screen: OFF (default) shows only GS subjects, ON shows only
+optional subjects — subject cards, year-folder browsing and the stat metrics all follow
+the switch. Prelims has no such concept (the flag is always `false` there).
+The flag is **data, not presentation**: it was backfilled from the `" Optional"`
+name-suffix convention, future content dumps inherit it from the same convention
+automatically, and the portal can correct a mislabeled subject with the flip endpoint
+(§3). One side effect to know: **older app builds and the web app** (which predate the
+switch) only receive the GS subjects on mains — optional subjects are simply absent for
+them until those clients ship the new UI.
+
 **Icon keys:** the physical icon assets are **bundled inside the mobile app** — the portal
 only assigns one of the canonical **keys** below (returned as `validIconKeys` for a picker;
 any other key is rejected with 400). Adding a brand-new icon requires a mobile app release.
