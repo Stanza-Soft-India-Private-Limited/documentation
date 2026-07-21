@@ -82,7 +82,7 @@ POST /sme/filter-config/mains/:subject/optional  body {isOptional}
   derivation (exact map + contains chain ported from mobile `getSmeIconForSubject`, default
   `sme_history`), F8 name rule, `buildSubjectFilters`, row-locked `updateOverride`.
 - `src/modules/sme/{controllers,services,dto}/sme-filter-config.*` — portal surface.
-- Docs: `docs/sme/SME_PORTAL_API.md` §6 (handed to portal team).
+- Docs: `docs/sme/SME_FILTER_CONFIG_API.md` (dedicated per-concern guide, handed to portal team; stub pointer remains at SME_PORTAL_API.md §6).
 - Tests: `mains.service.filters.spec.ts`, `sme-filter-config.service.spec.ts`.
 
 ## Rollout order (load-bearing)

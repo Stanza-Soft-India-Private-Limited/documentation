@@ -168,53 +168,11 @@ Force-expires premium now: `status=UNSUBSCRIBED`, `premiumExpiresAt=now`, Neo4j 
 Wylto→Churned. Response: `{ "success": true, "expiredAt": "2026-06-16T…" }`.
 
 ### 1.8 Extend trial
-```
-POST /sme/users/:id/trial-extension
-{ "days": 14, "reason": "Escalated support ticket #4821 — gave 2 extra weeks" }
-```
-| Field | Required | Description |
-|---|---|---|
-| days | yes | integer, 1–365 |
-| reason | no | free text, ≤200 chars — **not** shown to the user, stored only on the `sme_audit_log` row (`TRIAL_EXTEND`) |
 
-**Semantics:**
-- Adds `days` on top of `max(now, current trial end)` — i.e. it always extends
-  forward from "whichever is later: right now, or the trial end already in
-  effect." It never rewinds an end date, and back-to-back calls **stack**: there
-  is no lifetime cap, every call is independently audited.
-- Works for a user who is: **currently in-trial** (just pushes the end further
-  out), **trial-expired** (never paid, window closed), or **churned**
-  (previously paid, now lapsed). For the latter two, the user is **revived** —
-  `status` flips back to `ACTIVE` — and they get **full premium access** until
-  the new trial end, exactly like being freshly inside the 14-day window.
-- Sends **no push notification** — see "Recommended portal UX" below.
-- **400** if the user currently has an **active paid subscription**
-  (`status=SUBSCRIBED` and not expired) — use §1.6 Grant premium instead.
-- **400** if the user is `SUSPENDED`, `LOCKED`, `ONBOARDING`, or `INACTIVE`
-  (non-standard lifecycle states — reactivate/onboard them first).
-- **404** if the user doesn't exist.
-
-**Response 200:**
-```json
-{
-  "success": true,
-  "trialEndsAt": "2026-08-15T10:30:00.000Z",
-  "trialDaysLeft": 26,
-  "statusChanged": true,
-  "previousTrialEndsAt": "2026-07-06T10:30:00.000Z"
-}
-```
-`statusChanged` is `true` when the call revived a lapsed/churned user (`status`
-went to `ACTIVE`); `false` when it just extended an already-active trial.
-`previousTrialEndsAt` is the trial end that was in effect right before this call
-(useful for an undo/audit UI).
-
-> **Recommended portal UX:** pair the "Extend trial" action with a **"Notify
-> user"** button that calls §1.9 (`POST /sme/users/:id/notify`) right after a
-> successful extension. The backend deliberately does **not** push a
-> notification on extension — the portal owns the messaging (wording, timing,
-> whether to notify at all), so wire the two actions together in the UI rather
-> than assuming the user was told.
+`POST /sme/users/:id/trial-extension` — extend a user's free trial by N days, including
+reviving trial-expired and churned users. **Full guide (semantics, revival rules, response
+shape, recommended notify pairing): [SME_TRIAL_EXTENSION_API.md](./SME_TRIAL_EXTENSION_API.md).**
+Audited as `TRIAL_EXTEND`.
 
 ### 1.9 Notify a single user
 ```
@@ -368,125 +326,11 @@ endpoints reuse the same parser as the existing live blog admin, so output is id
 
 ## 6. Subject Filter Config — `/sme/filter-config`
 
-Manages what the app's PYQ **Prelims** and **Mains** subject filters look like: per-subject
-**display name**, **icon**, **visibility** and **sort position** — plus flipping a mains
-subject between **Optional** and **GS**. Defaults are auto-derived from the live question
-data; SME entries are **overrides** layered on top. The merged result is served to the
-apps on the public `GET /mains/filters` and `GET /pyq/filters` endpoints (new `subjectsMeta`
-field), so the portal never has to touch the apps.
-
-**Icon keys:** the physical icon assets are **bundled inside the mobile app** — the portal
-only assigns one of the canonical **keys** below (returned as `validIconKeys` for a picker;
-any other key is rejected with 400):
-
-```
-sme_art, sme_current_affairs, sme_economy, sme_environment, sme_ethics,
-sme_geography, sme_governance, sme_history, sme_ir, sme_polity, sme_science_technology
-```
-
-**Propagation:** the public `/filters` endpoints are cached for up to 1 hour, but every
-write below **clears that cache**, so changes are visible on the very next app request.
-(Worst case — if the cache clear itself fails — within the hour.)
-
-`examType` is `prelims` or `mains`. `:subject` path params are the **raw** subject value,
-URL-encoded (e.g. `GS%20Paper%201`, `Sociology%20Optional`).
-
-### 6.1 Get filter config (per exam type)
-```
-GET /sme/filter-config/:examType
-```
-Returns every subject present in the (active) question data — plus any stale override
-entries whose questions are gone (`questionCount: 0`) so they stay clearable. Hidden
-subjects ARE included here (the portal must see everything); the public endpoints drop them.
-
-```json
-{
-  "examType": "mains",
-  "validIconKeys": ["sme_art", "…", "sme_science_technology"],
-  "entries": [
-    {
-      "subject": "GS Paper 1",
-      "isOptional": false,
-      "questionCount": 270,
-      "effective": { "displayName": "GS Paper 1", "iconKey": "sme_history", "hidden": false, "sortOrder": 1 },
-      "override": { "sortOrder": 1 }
-    },
-    {
-      "subject": "Sociology Optional",
-      "isOptional": true,
-      "questionCount": 729,
-      "effective": { "displayName": "Sociology", "iconKey": "sme_governance", "hidden": false, "sortOrder": null },
-      "override": null
-    }
-  ]
-}
-```
-
-- `effective` = what the app actually renders (defaults merged under the override).
-- `override` = only what SME explicitly set (`null` = pure defaults).
-- Default `displayName` strips a trailing `" Optional"` **only when the subject is
-  actually optional**; default `iconKey` is auto-matched from the subject name.
-- Entries are sorted like the app (explicit `sortOrder` first — lower = earlier —
-  then alphabetically by display name).
-
-Errors: **400** unknown `examType`.
-
-### 6.2 Update one subject's override
-```
-PUT /sme/filter-config/:examType/:subject
-```
-| Body field | Type | Description |
-|---|---|---|
-| displayName | string \| null | Label shown in the app. `null` clears back to the default |
-| iconKey | string \| null | One of `validIconKeys`. `null` clears back to the auto-derived icon |
-| hidden | boolean \| null | `true` removes the subject from the public filters. `null` clears (=visible) |
-| sortOrder | number \| null | Explicit position (lower first; subjects without one sort last, alphabetically). `null` clears |
-
-Field semantics: **omitted = untouched, `null` = clear, value = set.** Clearing every
-field removes the override entry entirely. Concurrent-safe (row-locked read-modify-write).
-
-```json
-// PUT /sme/filter-config/mains/Law%20Optional
-{ "displayName": "Law", "iconKey": "sme_polity" }
-```
-Response — the updated entry:
-```json
-{
-  "examType": "mains",
-  "subject": "Law Optional",
-  "isOptional": true,
-  "effective": { "displayName": "Law", "iconKey": "sme_polity", "hidden": false, "sortOrder": null },
-  "override": { "displayName": "Law", "iconKey": "sme_polity" }
-}
-```
-Errors: **400** unknown `examType` or unknown `iconKey` (message lists the valid keys).
-Audit: `FILTER_CONFIG_UPDATE` (before/after of just that subject's override).
-
-### 6.3 Flip a mains subject between Optional and GS
-```
-POST /sme/filter-config/mains/:subject/optional
-```
-Bulk-updates `isOptional` on **all** mains questions of that subject (self-service
-correction for content dumps that mislabeled optionality). Prelims has no optional concept.
-
-Body: `{ "isOptional": true | false }`
-
-```json
-// POST /sme/filter-config/mains/History%20Optional/optional  { "isOptional": false }
-{
-  "subject": "History Optional",
-  "isOptional": false,
-  "updatedCount": 546,
-  "effective": { "displayName": "History Optional", "iconKey": "sme_history", "hidden": false, "sortOrder": null }
-}
-```
-
-Note the display-name behavior: a subject flipped to non-optional keeps its **raw** name
-(no automatic `" Optional"` stripping) until SME sets a `displayName` override — this is
-deliberate, so nothing gets silently mislabeled.
-
-Errors: **404** no mains questions for that subject.
-Audit: `MAINS_OPTIONAL_FLIP` (pre-flip row counts + updated count).
+Per-subject display name / icon / visibility / sort order for the app's PYQ Prelims and
+Mains filters, plus flipping a mains subject between Optional and GS. **Full guide
+(endpoints, icon-key list, override semantics, cache propagation):
+[SME_FILTER_CONFIG_API.md](./SME_FILTER_CONFIG_API.md).** Audited as
+`FILTER_CONFIG_UPDATE` / `MAINS_OPTIONAL_FLIP`.
 
 ---
 

@@ -12,6 +12,8 @@ SME team builds their own UI against them.
 | Doc | Covers |
 |---|---|
 | [SME_PORTAL_API.md](./SME_PORTAL_API.md) | Master guide — users, transactions, blogs, notifications (summary), premium grant/revoke |
+| [SME_TRIAL_EXTENSION_API.md](./SME_TRIAL_EXTENSION_API.md) | Trial extension in depth — extend/stack N days, revival of expired/churned users, notify pairing |
+| [SME_FILTER_CONFIG_API.md](./SME_FILTER_CONFIG_API.md) | PYQ subject filter config — per-subject display name/icon/visibility/sort overrides, mains Optional↔GS flip, icon-key contract |
 | [SME_NOTIFICATIONS_API.md](./SME_NOTIFICATIONS_API.md) | Push notifications in depth — per-user / broadcast / segment, deep-link `type` contract, premium-vs-free mechanics, caveats |
 | [SME_APPLE_IAP_API.md](./SME_APPLE_IAP_API.md) | Apple IAP in depth — payments/orders via `source=APPLE`, the Apple event/notification stream on `/sme/webhooks`, subscription lifecycle, Razorpay-safe `/sme/webhooks` change |
 | [SME_USAGE_ANALYTICS.md](./SME_USAGE_ANALYTICS.md) | DAU & usage analytics — live `/sme/analytics/*` endpoints (summary, dau two-series, features, per-user, retention, churn, premium-engagement, paywall, heatmap, endpoints, platforms, content, notifications) + the bounded `api_usage` capture/rollup |
