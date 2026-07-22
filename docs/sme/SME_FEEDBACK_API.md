@@ -95,7 +95,7 @@ overrides):
 ```json
 {
   "chipSets": { "chat": { "chips": [{ "key": "inaccurate", "label": "Inaccurate answer" }] }, "…": {} },
-  "survey": { "snoozeDays": 3, "maxDismissals": 2 },
+  "survey": { "snoozeDays": 3, "maxDismissals": 2, "listWindowDays": 30 },
   "limits": { "reportsPerDay": 10, "chatPerDay": 30 }
 }
 ```
@@ -105,7 +105,9 @@ The 9 chip sets are `chat`, `pyq_question`, `mains_question`,
 `feature_request`, `app_error`.
 
 `PUT` accepts a partial `{ chipSets?, survey?, limits? }`. Only the sections you
-send are touched (row-locked read-modify-write). Chip **keys** are stable ids —
+send are touched (row-locked read-modify-write). `survey.listWindowDays` (default
+30) bounds how far back the user-facing surveys inbox looks — see §4.1. Chip
+**keys** are stable ids —
 `^[a-z0-9_]{1,40}$`, unique within a set, each with a non-empty label; **labels**
 are freely editable. A write busts the public `GET /feedback/config` cache
 immediately and is audited (only the affected sections).
@@ -160,6 +162,27 @@ survey. Questions are editable while `DRAFT`.
 Multiple surveys can be `ACTIVE`; the app shows **at most one** per user
 (deterministic: priority desc → activatedAt asc → id). Activation itself is
 silent (no push).
+
+### 4.1 User-facing surfaces — dashboard card vs. surveys inbox
+
+The app has two read surfaces over the same eligibility, and they intentionally
+disagree on one thing: **dismiss**.
+
+- **`GET /feedback/surveys/current`** — the single dashboard-card pick
+  (priority desc → activatedAt asc → id, first eligible). A `SNOOZED` survey is
+  excluded until `snoozedUntil` lapses; a `DISMISSED_PERMANENT` survey is
+  excluded forever. This is the "don't nag me" surface.
+- **`GET /feedback/surveys/open`** — the full surveys inbox (every open survey,
+  `activatedAt desc`). Snooze/permanent-dismiss do **not** exclude a survey
+  here — dismiss only silences the dashboard card, it does not make a survey
+  unreachable. Only an `ANSWERED` response excludes a survey from this list.
+  Also bounded by `survey.listWindowDays` (§3): a survey older than that many
+  days since `activatedAt` drops out of the inbox even if still eligible and
+  unanswered, so the list can't grow unbounded as old surveys pile up.
+
+Both are per-user JWT endpoints (not cached — cohort + response state are
+per-user) and return the same survey shape `{ id, title, description,
+questions }`; `/open` additionally includes `activatedAt` for inbox sorting.
 
 ### Announce — `POST /sme/surveys/:id/notify`
 
