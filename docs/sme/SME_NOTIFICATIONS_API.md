@@ -168,8 +168,14 @@ else lands on **Home**:
 | `mnemonics` | — | Mnemonics | `/open/mnemonics` |
 | `saved` | — | Saved questions | `/open/saved` |
 | `premium` | — | Upgrade / Premium screen | `/open/premium` |
+| `report` | ✅ | that feedback report's detail (My Reports) | `/open/report/<id>` |
+| `survey` | ✅ | the survey runner for that survey | `/open/survey/<id>` |
 
-Anything not in this table falls back to **Home**. `type` is a free string on the send
+Anything not in this table falls back to **Home**. `report` and `survey` are sent
+automatically by the feedback module — `report` on a status change or SME reply
+(`id` = reportId), `survey` by `POST /sme/surveys/:id/notify` (`id` = surveyId). A
+survey deep-link to an expired/replaced survey lands on a graceful "no longer
+available" state, never an error screen. `type` is a free string on the send
 API (no backend change to use a new one). ⚠️ The `chat_expert`, `mains`, and the parity
 types (`pyq`/`doc`/`simulation`/`library`/`premium`/…) route only on **app builds ≥ the
 release that shipped them** — older installs fall back to Home for those *push* types
