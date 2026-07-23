@@ -1,8 +1,46 @@
 # SME — User Activity Trail API
 
+> ## ⛔ BEFORE YOU WRITE ANY UI CODE — INVOKE THE `frontend-design` SKILL
+> If you are a Claude/coding session building anything on top of these endpoints, your
+> **first action** is to invoke the **`frontend-design`** skill (`/frontend-design`). Do
+> this **even if no one asked you to** and even if the surrounding task didn't mention
+> design. Every panel, timeline row, incident cluster and empty state below must be
+> designed through that skill — do not reach for a default admin-template layout. This is
+> a hard requirement, not a suggestion.
+>
+> Design for what this contract actually becomes: **the support desk's answer sheet.** An
+> internal operator has a PrepMonkey user on the phone or in a WhatsApp thread *right now*
+> saying something went wrong, and is reading this screen while the user waits. It has to
+> make the operator competent in about ten seconds — who this is, whether they're paid,
+> whether something is broken — and only then let them dig. Audience = internal support/ops
+> staff under time pressure, not analysts and not consumers. The job of the screen is *fast
+> situational awareness*, then *drill-down*. Anything that costs the operator a second of
+> reading while a human is on the line is a design failure.
+>
+> The information architecture that goes with this contract is a separate document —
+> [`SME_USER_DETAIL_PAGE_GUIDE.md`](./SME_USER_DETAIL_PAGE_GUIDE.md). Read both.
+>
+> Paste this with the docs when you brief an agent:
+>
+> ```
+> Invoke the /frontend-design skill first, before writing any UI code.
+> Then build the SME user-detail page per SME_USER_DETAIL_PAGE_GUIDE.md,
+> using SME_ACTIVITY_TRAIL_API.md as the authoritative field contract.
+> This is a support-desk screen read under time pressure with a user on the phone:
+> optimise for ten-second situational awareness first, drill-down second.
+> Responses are RAW JSON — there is no {success,data} envelope; branch on HTTP status.
+> Render every "unavailable"/"not recorded yet" state explicitly; never show 0 for it.
+> Use the server-rendered `title` strings; do not reimplement 17 per-source formatters.
+> ```
+
 The support/debug surface that answers **"what happened to this user, end to end"**.
 Five endpoints under `/sme/users/*`: a snapshot header, a merged timeline, auto-grouped
 incidents, staff notes, and support-code lookup.
+
+**Status: all five are deployed and were exercised against a real production account on
+2026-07-23** — snapshot, timeline (17 sources, cursor-paginated), incidents, and
+support-code lookup all returned `200` with the `x-api-key`. `POST …/notes` is live on the
+same controller and guard; it is the only write, so it was not fired against production.
 
 **Base URL:** `https://app.stanzasoft.ai/api/v1`
 **Auth:** `x-api-key: <API_KEY_SECRET>` header on **every** request (`@SmeApiKey`).
@@ -23,9 +61,17 @@ every `YYYY-MM-DD` date input is resolved at **UTC+05:30**. `Date` fields are IS
 `response.data.user.email`.
 
 > This exact wrong assumption — reading `.data` off a raw body — crashed a mobile release
-> last week. Do not port an envelope-unwrapping helper from another integration. If some
-> other doc in this folder (e.g. `SME_FEEDBACK_API.md`) says "all responses ride the global
-> envelope", that statement is wrong; the code is the authority.
+> last week. Do not port an envelope-unwrapping helper from another integration. The
+> pre-2026-07-23 copy of [`SME_FEEDBACK_API.md`](./SME_FEEDBACK_API.md) claimed "all
+> responses ride the global envelope"; that copy is superseded and the current one carries
+> the correction at the top. If any doc anywhere disagrees with this paragraph, the code is
+> the authority.
+>
+> ⚠️ Not the same thing: a few endpoints hand-roll a **pagination** wrapper inside their own
+> controller — `GET /sme/users` and the feedback lists return
+> `{ data: [...], total, page, limit, hasMore }`. That is a documented per-endpoint shape,
+> not a global envelope, and it does not appear on any endpoint in this document. Trust the
+> shape printed under each endpoint; never a global rule.
 
 ### Error responses DO have a different shape.
 
@@ -143,7 +189,15 @@ predates the field* — it does **not** mean permission was denied.
 **6. `api_usage` skips some traffic by design.**
 Only **authenticated** requests are captured (`request.user.id` must exist), and the routes
 `/sme/*`, `/health*`, `/config*` are skipped outright. Only the route **template** is stored
-(`/pyq/:id/reveal`) — never ids, query strings, bodies, headers or IPs. The single exception
+(`/api/v1/pyq/:id/reveal`) — never ids, query strings, bodies, headers or IPs.
+
+⚠️ **The stored route keeps the `/api/v1` global prefix.** It is Express's
+`request.route.path` verbatim, so a real row reads `/api/v1/tasks/today`, not
+`/tasks/today` — verified live on 2026-07-23. The skip-list match strips the prefix before
+comparing, but the **stored value does not**. If you group, filter or pretty-print routes in
+the portal, strip `^/api/v[0-9]+` yourself; do not assume the leading segment is the module.
+(The handful of handlers Nest excludes from the prefix — `config` — genuinely store the bare
+path, so handle both forms.) The single exception
 is `POST /quota/begin`, whose `feature` body field is stored **only** when it matches the
 closed enum `chat_mentor | chat_sme | chat | flashcard | mnemonic | mains_eval | pyq_variation`.
 So no PII can land in that column — and every AI feature that used to collapse into one
@@ -180,7 +234,7 @@ field rather than the request.
   },
   "entitlement": {
     "isPremium": true,
-    "premiumState": "PREMIUM",
+    "premiumState": "Premium",
     "premiumExpiresAt": "2027-03-02T06:11:04.000Z",
     "subscriptionSource": "APPLE",
     "trialEndsAt": null,
@@ -234,7 +288,7 @@ field rather than the request.
     "lastActiveAt": "2026-07-23T08:55:12.000Z",
     "lastSessionAt": "2026-07-23T08:55:10.000Z",
     "lastRequestAt": "2026-07-23T08:55:12.000Z",
-    "lastRequestRoute": "GET /tasks/today",
+    "lastRequestRoute": "GET /api/v1/tasks/today",
     "lastClientEventAt": "2026-07-23T04:01:58.000Z",
     "lastClientEventType": "login_success"
   },
@@ -257,7 +311,7 @@ field rather than the request.
 |---|---|
 | `user.supportCode` | The code the user reads aloud (see §5). Derived, never stored. Empty string `""` if the id isn't a UUID — render nothing, not `""`. |
 | `user.status` | Postgres lifecycle: `ACTIVE`, `SUBSCRIBED`, `INACTIVE`, `SUSPENDED`, `LOCKED`, `ONBOARDING`. **Never use `status === "ACTIVE"` as a premium signal** — that's the trial state. |
-| `entitlement.isPremium` / `premiumState` | Computed by the shared `premium-check.util` (PostgreSQL `status` + `premiumExpiresAt` + `createdAt` + `trialEndsAt`). This is the authoritative entitlement answer. |
+| `entitlement.isPremium` / `premiumState` | Computed by the shared `premium-check.util` (PostgreSQL `status` + `premiumExpiresAt` + `createdAt` + `trialEndsAt`). This is the authoritative entitlement answer. **`premiumState` is a closed set of five human-readable labels, title-cased, one with a space: `Premium` · `Trial` · `Trial Ended` · `Churned` · `Downloaded`.** It is *not* SCREAMING_CASE and it is *not* the same vocabulary as the Wylto CRM statuses — the two were deliberately decoupled so a marketing rename cannot change this response. Match on the exact strings above. |
 | `entitlement.trialEndsAt` / `trialDaysLeft` | Non-null **only** while the user is actually inside a trial (`status === 'ACTIVE'` and now < trial end). `trialDaysLeft` is ceil'd days. |
 | `entitlement.recentOrders[]` | Last **5** orders, newest first. `amount` is **converted to major units** (rupees/dollars) — the DB stores paise/cents, this endpoint already divided by 100. Don't divide again. |
 | `quota.*` | See limitation 3. `features` is `Record<featureKey, …>` whose value shape varies by cap type: `{ unlimited: true, type }` for premium; `{ used, limit, remaining, type: 'daily' \| 'lifetime' }`, `{ type: 'lifetime_per_subject', limit, perSubject: true }`, or `{ type: 'premium_only' }` for free. Render generically off `type`. |
@@ -272,6 +326,36 @@ field rather than the request.
 
 **Errors:** 404 if the user id doesn't exist. Quota and streak failures do **not** error — they
 come back with `available: false`.
+
+### How to use this data
+
+**Questions it answers.** "Who am I talking to?" · "Are they actually paying, and through
+which store?" · "Have they hit today's cap?" · "Which build are they on?" · "Are they even
+reachable by push?" All of it in one round-trip, before the operator has finished saying hello.
+
+**The decision it drives.** Whether this is a *billing* conversation, a *quota* conversation,
+a *stale-build* conversation, or a genuine bug — which is the only branch that costs
+engineering time. Three fields settle it: `entitlement.premiumState`,
+`quota.features[…].remaining`, and `clients.appVersions[0].appVersion`.
+
+**What a good visualisation is.** A single header band, not a grid of stat cards. Identity on
+the left (name → phone → email fallback chain, with the support code in monospace next to it
+because the operator is reading it back). Entitlement as one state chip using the exact
+`premiumState` string. Then a short row of *labelled* facts — trial days left, today's quota,
+streak, last seen, app version — each of which is allowed to say "unavailable" in words.
+Resist a dashboard here: this is a page header, and its whole job is to be readable in one
+saccade. Activity counts belong lower, as a compact source list where each count is a link
+into `timeline?sources=<key>` — they are navigation, not a metric.
+
+**The action that follows.** Copy the support code into the ticket; jump to `incidents` if
+anything failed; write a note. A real production snapshot on 2026-07-23 (fresh trial account,
+minutes old) returned `premiumState: "Trial"`, `trialDaysLeft: 14`, `activity.total: 22` with
+**every** count except `api_usage` at zero, `streak.currentStreak: 0` with
+`available: true`, and `clients.appVersions: [{ appVersion: null, platform: null }]`. That is
+the *normal* shape for most users today, and it is the shape your empty states have to look
+good in: a brand-new user on a pre-1.7 build who has done nothing yet. Note the trap in that
+payload — `streak.available: true` with a `0` streak is a **real** zero, whereas
+`available: false` would mean "Neo4j didn't answer". Those must not render identically.
 
 ---
 
@@ -305,12 +389,12 @@ render `meta.from`/`meta.to`, not the values you sent. `from` after `to` → **4
       "id": "api_usage:c1f0…",
       "rowId": "c1f0…",
       "source": "api_usage",
-      "type": "POST /quota/begin [chat_mentor]",
+      "type": "POST /api/v1/quota/begin [chat_mentor]",
       "at": "2026-07-23T08:55:12.000Z",
-      "title": "POST /quota/begin [chat_mentor] → 200 (41ms)",
+      "title": "POST /api/v1/quota/begin [chat_mentor] → 200 (41ms)",
       "severity": "info",
       "data": {
-        "method": "POST", "route": "/quota/begin", "status": 200,
+        "method": "POST", "route": "/api/v1/quota/begin", "status": 200,
         "durationMs": 41, "feature": "chat_mentor",
         "appVersion": "1.7.0", "platform": "ios", "deviceId": "6f2c…"
       }
@@ -339,7 +423,7 @@ render `meta.from`/`meta.to`, not the values you sent. `from` after `to` → **4
 | `id` | `"<source>:<rowId>"`. Stable and unique across sources — use it as the React key. |
 | `rowId` | The underlying table's primary key. Also the cursor tiebreaker. |
 | `source` | One of the 17 canonical values below. Drives the icon/colour. |
-| `type` | Sub-kind *within* the source — `login_failed`, `POST /quota/begin [chat_mentor]`, `PAID`, `correct`, `ISSUE/OPEN`, `razorpay.webhook`, … Not a closed enum; it is per-source and safe to display verbatim. |
+| `type` | Sub-kind *within* the source — `login_failed`, `POST /api/v1/quota/begin [chat_mentor]`, `PAID`, `correct`, `ISSUE/OPEN`, `razorpay.webhook`, … Not a closed enum; it is per-source and safe to display verbatim. |
 | `at` | Event timestamp (UTC ISO). Whichever column that source is ordered by — see the table. |
 | `title` | A pre-rendered, human-readable one-liner. **Use it.** It is built server-side per source, so the portal doesn't reimplement 17 formatters. |
 | `severity` | `info` \| `warn` \| `error`. Drives colour only. `api_usage`: ≥500 → `error`, 400–499 → `warn`, else `info`. `auth_events`: `error` for the failure types listed in §3. Orders `FAILED` → `error`, `CANCELLED` → `warn`. Payments `FAILED` → `error`, `REFUNDED` → `warn`. Refunds always `warn`. Feedback `ISSUE` → `warn`, chat feedback `DOWN` → `warn`. |
@@ -401,13 +485,46 @@ the window or source set mid-scroll invalidates the position. `nextCursor` is `n
 **Errors:** 400 (bad source / malformed cursor / `from` after `to` / unparseable date), 404
 (unknown user).
 
+### How to use this data
+
+**Questions it answers.** "What did this user actually do, in order?" · "Did the thing they're
+describing happen at all?" · "Did the payment webhook land before or after they said they
+paid?" · "Was the order created and then never granted?" The timeline is the only surface in
+the product where a payment event, an app request and a support note sit on one clock.
+
+**The decision it drives.** Whether to believe the user's account of events. Support arguments
+are almost always about *ordering* — "I paid and it didn't unlock" is resolved by looking at
+`orders → payments → payment_events → api_usage` in sequence, not by looking at any one of
+them.
+
+**What a good visualisation is.** A dense single-column list, reverse-chronological, grouped
+under **IST day headers** (`istDate` semantics — never the UTC date of `at`). Each row is the
+server-rendered `title` plus a source marker and a relative time; `data` expands in place.
+Severity drives colour only, and only three colours. The source filter belongs above the list
+as a multi-select that mirrors the snapshot's count keys, so clicking "22 api_usage" in the
+header lands here pre-filtered. Do **not** build a swimlane or a horizontal timeline — the
+operator is scanning for one event, not comparing series.
+
+The single biggest UX risk is **`api_usage` drowning everything else.** A live production page
+of 5 rows on a two-minute-old account was 5 × `api_usage`, all within the same second, because
+the app fires a burst of GETs on launch. Default the filter to the *narrative* sources
+(orders, payments, payment_events, refunds, auth_events, feedback, notes) and make
+`api_usage` an explicit opt-in labelled as request noise. Otherwise page one is always
+`GET /api/v1/quota/me`.
+
+**The action that follows.** Copy the exact timestamp into the ticket, or switch to
+`incidents` if the story is about a failure. Two mechanical rules: always render `meta.from` /
+`meta.to` rather than what you asked for (the server clamps to 90 days), and always render
+`meta.retention.note` when it is non-null — a quiet stretch older than 30 days is *purged*,
+not idle, and an operator who reads it as idle will tell the user something false.
+
 ---
 
 ## 3. `GET /sme/users/:id/incidents`
 
 **Purpose:** the "what went wrong" shortcut. Purely **derived** from data already captured —
 no new tracking. Failures are pulled from two sources, merged newest-first, and clustered by
-time proximity so an agent reads *"at 14:22 IST, 3 failures on POST /payments/verify"* instead
+time proximity so an agent reads *"at 14:22 IST, 3 failures on POST /api/v1/payments/verify"* instead
 of scrolling a timeline.
 
 **What counts as a failure**
@@ -440,10 +557,10 @@ Up to **250 rows per source / 500 total** are scanned per page before clustering
       "istDate": "2026-07-23",
       "failureCount": 3,
       "severity": "error",
-      "title": "at 14:22 IST, 3 failures on POST /payments/verify (+1 other)",
+      "title": "at 14:22 IST, 3 failures on POST /api/v1/payments/verify (+1 other)",
       "sources": ["api_usage", "auth_events"],
       "byLabel": [
-        { "label": "POST /payments/verify", "count": 2 },
+        { "label": "POST /api/v1/payments/verify", "count": 2 },
         { "label": "purchase_failed", "count": 1 }
       ],
       "byStatus": [{ "status": 500, "count": 2 }],
@@ -498,6 +615,35 @@ independently. `rowCapHit` is `true` when **any one** source was truncated — w
 failures") — a user in this state is having a very bad day and the agent should know the list
 is truncated.
 
+### How to use this data
+
+**Questions it answers.** "Is anything actually broken for this person, or are they confused?"
+— and if so, "when, how many times, and on what?" This is the endpoint that turns *"the app
+isn't working"* into *"at 14:22 IST you got three 500s on the payment verify call."*
+
+**The decision it drives.** Escalate to engineering, or don't. A cluster of 5xx on one route
+is a bug report with a timestamp attached. A cluster of 402s is the paywall doing its job and
+the answer is a sales conversation. A cluster of `login_failed` is an auth/OTP problem and
+belongs with the OTP triage runbook, not with a feature team.
+
+**What a good visualisation is.** A short list of *stories*, not errors — one card per
+incident, headlined by the server's `title`, with `byLabel` as the breakdown and `byStatus` as
+a secondary line. Five sample rows expand inside the card in the exact same component the
+timeline uses (`samples[]` is deliberately `SmeTimelineItem`-shaped so you write one row
+renderer). Cap the card at what fits without scrolling; `failureCount` already tells the
+operator how much is hidden.
+
+**The action that follows.** Paste `startedAtIST` + the top `byLabel` entry into the
+escalation. Two things the UI must not hide: `meta.rowCapHit` / `truncatedSources` (say
+"showing the most recent 250 request failures" out loud), and the fact that clustering happens
+**within a page**, so a burst straddling a page boundary appears twice-halved. Raise `limit`
+rather than stitching clusters client-side.
+
+**The empty state is the common case and it is not a bug.** The verified production run on
+2026-07-23 returned `incidents: []` with `rowsScanned: 0` — a healthy user genuinely has no
+failures. Design that state deliberately: "No failures in the last 30 days" reads very
+differently from a blank panel, and the operator is about to say it out loud to a customer.
+
 ---
 
 ## 4. `POST /sme/users/:id/notes`
@@ -547,6 +693,28 @@ optimistic row in the UI must be rolled back, not left on screen.
 
 **Errors:** 400 (validation), 404 (unknown user).
 
+### How to use this data
+
+**The question it answers.** "Has anyone dealt with this person before, and what did they
+promise them?" There is no CRM behind this product; the note trail *is* the institutional
+memory for a user, and it is the only writable field on the whole surface.
+
+**The decision it drives.** Whether to repeat a diagnosis that was already made, and whether a
+refund/extension was already committed to. It also stops two operators independently
+promising two different things.
+
+**What a good visualisation is.** A compose box pinned near the top of the page (not buried at
+the bottom — the operator writes the note *while* on the call), with existing notes listed
+newest-first directly beneath it. Notes also appear inline on the timeline under
+`sme_audit_log`; that is a feature, not a duplicate — the panel is for writing and skimming,
+the timeline is for placing a note in the sequence of events.
+
+**The action that follows.** Post, then re-fetch. Two rules: this write is **not** best-effort
+like the other audit writes — a DB failure returns 5xx, so roll the optimistic row back rather
+than leaving it on screen; and `author` is **self-reported and unverified** (the `x-api-key`
+carries no identity), so render it as a typed-in label, never as an attested identity. If the
+portal has its own logged-in user, pass it — but do not put a verified-user avatar next to it.
+
 ---
 
 ## 5. `GET /sme/users/by-support-code/:code`
@@ -565,7 +733,7 @@ asking them to spell an email address.
   "phoneNumber": "+919876543210",
   "status": "SUBSCRIBED",
   "isPremium": true,
-  "premiumState": "PREMIUM",
+  "premiumState": "Premium",
   "createdAt": "2026-03-02T06:11:04.000Z"
 }
 ```
@@ -625,6 +793,29 @@ Worked example: id `0d2f8b41-9a3c-…` → hex prefix `0d2f8b419a` → `1MQR-PGC
 - **Don't index or cache on the code.** It is a function of the id — derive it, don't store it.
 - **Collisions:** 2^40 ≈ 1.1×10¹² over a user base in the thousands. The 409 path exists so the
   server never silently returns the wrong human, not because it's expected.
+
+### How to use this data
+
+**The question it answers.** "Which account is the person on the phone?" — without asking them
+to spell `priya@stanzasoft.com` letter by letter over a bad line.
+
+**The decision it drives.** Nothing analytical. This is pure navigation, and it is the
+**primary** entry point to the whole surface. Design it that way: a persistent input in the
+global header, not a tab inside `/app-users`. Type code → land on `/app-users/:id`.
+
+**What a good visualisation is.** A single text field with a monospace, uppercase-rendering
+input and *no input mask*. The server's decoder is deliberately lenient — verified live on
+2026-07-23, `54p3 6y4m` (lowercase, space instead of hyphen) resolved to the same account as
+`54P3-6Y4M`. A strict mask would reject codes the server would have happily accepted, which is
+the worst possible failure while a customer is reading digits aloud. Show the resolved
+identity — name, email, `premiumState` — for confirmation *before* navigating, so the operator
+can say "is that Gatij?" rather than silently opening the wrong page.
+
+**The action that follows.** Navigate. Handle three failures distinctly: `400` = "that isn't a
+valid code, ask them to read it again" (the message names the offending symbol), `404` = "no
+account has that code", `409` = "ambiguous — ask for their email or phone instead". Do **not**
+build a candidate picker for the 409; `candidates` is stripped by the exception filter and
+there is nothing to populate it with.
 
 ---
 
@@ -700,3 +891,15 @@ this project — verify via `information_schema`, not Prisma's migration state).
 - `incidents[].samples` is capped at 5. Paginate on `nextCursor` / `oldestRowId`, never on the
   last element of `samples`.
 - The timeline proves a chat happened and gives you its Dify id. It does not show what was said.
+- `api_usage.route` keeps the `/api/v1` prefix. Strip it yourself if you group by module.
+- `premiumState` is `Premium` / `Trial` / `Trial Ended` / `Churned` / `Downloaded` — title
+  case, one of them with a space. Not SCREAMING_CASE.
+
+---
+
+Related: [SME_USER_DETAIL_PAGE_GUIDE.md](./SME_USER_DETAIL_PAGE_GUIDE.md) (the UI this
+contract is for) · [SME_INSIGHTS_API.md](./SME_INSIGHTS_API.md) (the population-level view of
+the same `api_usage` / `auth_events` tables) ·
+[SME_USAGE_ANALYTICS.md](./SME_USAGE_ANALYTICS.md) ·
+[SME_PORTAL_API.md](./SME_PORTAL_API.md) (the `/app-users` roster this page links from) ·
+[WHAT_CHANGED_2026-07-23.md](./WHAT_CHANGED_2026-07-23.md)

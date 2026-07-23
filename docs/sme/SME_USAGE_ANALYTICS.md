@@ -91,8 +91,9 @@ maturedReadRatePct, pending, wastedSends, recipients`, plus an explicit
 `worstPerformers` kill-list ranked by wasted sends.
 ⚠️ **`isRead` is a bulk "opened the in-app feed" flag** set by `markFeedSeen`
 (`POST /notifications/feed/seen`) — **not** a per-push open, and push delivery is not
-tracked at all. ⚠️ **Time-to-read is not derivable** (no `read_at` column); the response
-says so explicitly. Rates are quoted on a **matured** sample only (default: rows ≥3 days old).
+tracked at all. ⚠️ **Time-to-read is derivable only from 2026-07-23 onward.** A `read_at` column was
+added that day and `markFeedSeen` now stamps it, but rows marked read BEFORE that have
+`read_at = NULL`. Never read NULL as "instant" — it means "read before we recorded when". Rates are quoted on a **matured** sample only (default: rows ≥3 days old).
 
 > Note: the older `GET /sme/analytics/notifications` (§4 above) returns the flat
 > `{ sent, read, readRate }` with **no maturation split and no isRead caveat**. Prefer
