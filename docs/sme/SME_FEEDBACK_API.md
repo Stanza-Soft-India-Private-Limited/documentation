@@ -6,8 +6,29 @@ surveys, and the tunable chip-set / snooze config.
 
 **Base URL:** `https://app.stanzasoft.ai/api/v1`
 **Auth:** `x-api-key: <API_KEY_SECRET>` on every `/sme/*` request (`@SmeApiKey`).
-All responses ride the global `{ success, message, data, timestamp, path }`
-envelope — read `data`. The one exception is the CSV export (raw file download).
+
+> ### ⚠️ CORRECTION (2026-07-23) — there is NO response envelope
+> An earlier version of this document stated that all responses ride a global
+> `{ success, message, data, timestamp, path }` envelope and that you should read
+> `data`. **That was wrong**, and it is the single most expensive mistake in this
+> codebase's history: a mobile release built envelope-decoding on top of it, the
+> surveys inbox crashed on-device (`[` where `{` was expected) and the survey card
+> silently rendered nothing.
+>
+> The truth, verified against the registration line rather than inferred:
+> `src/common/interceptors/response.interceptor.ts` defines such a wrapper but is
+> **registered nowhere**. The sole global `APP_INTERCEPTOR` in `app.module.ts` is
+> `ApiUsageInterceptor`. **Success bodies go out RAW** — a list endpoint returns a
+> bare JSON array, an object endpoint returns the bare object.
+>
+> Error bodies *are* shaped, but by `exception.filter.ts`, not by an envelope:
+> `{ success: false, message, error, statusCode, timestamp, path, method }`.
+>
+> **Client rule: branch on the HTTP status code, never on the presence of `success`.**
+> A few endpoints wrap manually inside their own controller — trust the per-endpoint
+> response shape documented below, not a global assumption.
+
+The CSV export returns a raw file download.
 
 ---
 
