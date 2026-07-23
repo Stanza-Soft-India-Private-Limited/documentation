@@ -81,4 +81,67 @@ Paginated; users active within 90 days but **silent for ≥`inactiveDays`**. Row
 - `paywall-hits` and `heatmap` are raw-sourced → ~30-day window; everything else honours the full `days`/date range (Plane A: months; Plane B rollup: 120d).
 - IST always (`days` boundaries resolve in IST).
 
+---
+
+## 7. Auth diagnostics + api_usage client context (raw tables)
+
+Two additive data sources landed for auth-failure triage and per-device attribution.
+No SME endpoint reads them yet (that's a later module) — query the raw tables directly.
+
+### `auth_events` — pre-auth + auth-lifecycle sink
+Written by the **@Public** `POST /diagnostics/auth-events` ingest (mobile emitters).
+The whole point is capturing failures *before* a user is authenticated (login / OTP /
+refresh), so there is **no FK on `user_id`** (rows survive account deletion). The raw
+login identifier is **never stored** — only `identifier_masked` (last-4 visible, e.g.
+`********7935`) and `identifier_hash` (SHA-256 hex of the normalized value: email
+lowercased, phone digits-only). To look up a phone, hash it the same way and match on
+the hash.
+
+`event_type ∈ login_attempt | login_success | login_failed | otp_send_failed | otp_verify_failed | refresh_failed | forced_logout`
+(validated at ingest, stored as text for forward-compat). Other columns: `device_id`,
+`platform`, `app_version`, `device_model`, `os_version`, `error_code`, `message` (≤500),
+`ip`, `created_at`. Rate-limited 60/hour per device (fallback IP) — silent 429.
+
+```sql
+-- Failed logins in the last 7 days for a specific phone (hash it the same way the
+-- server does: digits-only, then sha256 hex).
+SELECT created_at, event_type, error_code, platform, app_version, ip
+FROM auth_events
+WHERE identifier_hash = encode(digest('919876547935', 'sha256'), 'hex')  -- pgcrypto
+  AND event_type IN ('login_failed', 'otp_verify_failed', 'otp_send_failed')
+  AND created_at > now() - interval '7 days'
+ORDER BY created_at DESC;
+
+-- Which device_ids has one user authed from? (correlate account sharing / churn)
+SELECT DISTINCT device_id, max(created_at) AS last_seen
+FROM auth_events
+WHERE user_id = $1 AND device_id IS NOT NULL
+GROUP BY device_id
+ORDER BY last_seen DESC;
+```
+
+### `api_usage` context columns
+`api_usage` gained nullable `app_version`, `platform`, `device_id` (from the
+`x-app-version` / `x-platform` / `x-device-id` request headers). Row-level context
+only — the `api_usage_daily` rollup is **untouched** (still `day × user × route`).
+Populated deploy-day forward for header-sending clients; older rows stay null.
+
+```sql
+-- Distinct devices per user from real API traffic (30d raw window).
+SELECT user_id, count(DISTINCT device_id) AS devices
+FROM api_usage
+WHERE device_id IS NOT NULL AND created_at > now() - interval '30 days'
+GROUP BY user_id
+ORDER BY devices DESC;
+
+-- App-version spread of active users (last 7 days).
+SELECT app_version, platform, count(DISTINCT user_id) AS users
+FROM api_usage
+WHERE app_version IS NOT NULL AND created_at > now() - interval '7 days'
+GROUP BY app_version, platform
+ORDER BY users DESC;
+```
+
+---
+
 Related: [[reference_usage_dau_sources]], [[sme-portal-integration]], [[feedback_ist_timezone]].
