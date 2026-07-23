@@ -1,6 +1,6 @@
-# SME — Insight Endpoints (question quality · release health · notification effectiveness)
+# SME — Insight Endpoints (question quality · release health · notification effectiveness · onboarding funnel)
 
-Three read-only decision endpoints for the SME portal. Each one exists because a
+Four read-only decision endpoints for the SME portal. Each one exists because a
 decision is currently being made by guessing:
 
 | Endpoint | The guess it replaces |
@@ -8,6 +8,7 @@ decision is currently being made by guessing:
 | `GET /sme/content/question-quality` | "which questions are bad?" — today the content team eyeballs it |
 | `GET /sme/analytics/release-health` | "should we force-update?" — today it's a hunch |
 | `GET /sme/analytics/notification-effectiveness` | "is this push working?" — today the only lever is *send more* |
+| `GET /sme/analytics/onboarding-funnel` | "where do signups die?" — today nobody can answer at all |
 
 **Base URL:** `{{BASE_URL}}/api/v1` (prod `https://app.stanzasoft.ai`)
 **Auth:** `x-api-key: <API_KEY_SECRET>` on every request · **Swagger:** `/api/docs` (group **SME**)
@@ -293,19 +294,25 @@ cannot travel without its caveat.
 
 ### ⚠️ Time-to-read is NOT derivable
 
-`notification_history` has **no `read_at` column** and no per-row mark-read path.
-The instant of reading is never stored. So the response returns:
+`notification_history.read_at` **now exists** (commit `c146d94`) and
+`notifications.service.ts` stamps it inside the same `markFeedSeen` `updateMany` as
+`isRead`. That is still not enough: it is a **bulk feed-open** timestamp, not a
+per-notification open, and every row read before the column shipped has `read_at`
+NULL. The instant *this* notification was read is still not stored. So the response
+returns:
 
 ```jsonc
 "timeToRead": {
   "derivable": false,
-  "reason": "Not derivable. notification_history has no read_at column and no per-row mark-read path — isRead is flipped in bulk by markFeedSeen, so the instant of reading is never stored. Any \"time to read\" number would be fabricated. …"
+  "reason": "Not derivable YET. notification_history.read_at now exists and notifications.service.ts stamps it inside the same markFeedSeen updateMany as isRead — but that is still a BULK feed-open timestamp, not a per-notification open, and rows read before the column shipped have read_at NULL. …"
 }
 ```
 
-Do **not** synthesise this client-side. Getting it would need a nullable `read_at`
-(stamped inside the same `updateMany`) or a per-notification open event — both are
-schema changes, and neither is part of this endpoint.
+Do **not** synthesise this client-side. Once there is enough post-migration history,
+`read_at − sent_at` becomes quotable as *"how long until this recipient came back to
+the app"* — never as *"how long until they opened this push"*. A true
+per-notification metric still needs an open event, which is not part of this
+endpoint.
 
 ### Maturation — why the rates aren't what you'd naively compute
 
@@ -364,7 +371,219 @@ matters less than a 15%-read type sent 4000 times.
 
 ---
 
-## 4. Performance stance (shared by all three)
+## 4. `GET /sme/analytics/onboarding-funnel`
+
+> `auth_events` captures the **pre-auth** failures and `api_usage` covers everything
+> **post-auth**, so for the first time signup → OTP → psychometric → first real
+> action is traceable end to end. This endpoint is that trace.
+
+Signup cohort in, funnel out: how many reach each stage, how many are lost between
+stages, how long each stage takes where a timestamp exists — and the OTP/login
+failure counts over the same window, so a spike in `otp_verify_failed` sits next to
+the phone-verification drop it caused.
+
+### ⚠️⚠️ Read this before quoting a single failure number
+
+**`auth_events` cannot answer for time before it existed.** The table was created by
+migration `20260723120000_add_auth_events` on **2026-07-23**; no row in it can
+predate that. Any part of a window reaching further back is **structurally empty** —
+not quiet, not healthy, *empty*.
+
+**And it is mostly a client-ingested sink — but emitter coverage is now SPLIT.**
+Verified against the codebase:
+
+| Event type | Server-side emitter | Mobile emitter | So a zero means |
+| --- | --- | --- | --- |
+| `otp_send_failed` | ✅ `OtpService.emitOtpSendFailed` — both `storeOtp` cache-unavailable branches **and** the Wylto delivery failure. Live from the deploy that added it. | pending a release | "no **backend-visible** send failure" — narrower than "no failure", but a **non-zero here is real data, do not discount it** |
+| `login_attempt` | ❌ | pending a release | "not recorded yet" |
+| `login_success` | ❌ | pending a release | "not recorded yet" |
+| `login_failed` | ❌ | pending a release | "not recorded yet" |
+| `otp_verify_failed` | ❌ | pending a release | "not recorded yet" |
+
+So for the four mobile-only types: until that app release ships and users update,
+**these counts stay at zero however many logins are actually failing in
+production.** For `otp_send_failed` the backend now answers for itself — the exact
+gap that made the Valkey outage present only as users saying "OTP expired".
+
+(Other server-side writers exist for event types this endpoint does not read:
+`QuotaService` → `chat_conversation_started`, `DifyMetricsService` → `dify_call`.)
+
+So the response never lets a zero travel alone:
+
+```jsonc
+"authEvents": {
+  "available": false,
+  "captureStartedAt": "2026-07-22T18:30:00.000Z",   // IST midnight on 2026-07-23
+  "windowStartsBeforeCapture": true,
+  "coveredFrom": "2026-07-22T18:30:00.000Z",
+  "coveredDays": 1, "uncoveredDays": 29,
+  "totalEvents": 0, "totalFailures": 0,
+  "zeroMeansNoDataNotNoFailures": true,             // ← branch on THIS
+  "interpretation": "NO DATA YET, not \"no failures\". auth_events capture began 2026-07-23 (IST) … Emitter coverage is SPLIT. otp_send_failed now has a SERVER-SIDE emitter … login_attempt/login_success/login_failed/otp_verify_failed remain MOBILE-ONLY … Render this panel as \"not recorded yet\"."
+}
+```
+
+* `zeroMeansNoDataNotNoFailures: true` ⇒ render **"not recorded yet"**, never
+  **"no failures"**, and never a green tick.
+* `byDay[].authEvents` is **`null`** — not `0` — for every IST day before capture.
+  A zero there would be a lie with a number attached.
+* `meta.caveats[0]` is always the `interpretation` sentence, so the warning leads
+  the list rather than being buried in it.
+* When the whole window predates capture the endpoint **does not even query the
+  table** — it returns `coveredDays: 0` and says so.
+
+### The five stages (each verified against `prisma/schema.prisma`)
+
+| # | `key` | Reached when | Time-to-reach |
+|---|---|---|---|
+| 1 | `signup` | `user_auth."createdAt"` inside the cohort window. **This is the denominator.** | t₀ |
+| 2 | `phone_verified` | `user_auth.phone_verified = true` | `phone_verified_at − createdAt`. The column is nullable, so rows verified before it existed are **counted but not timed** (`detail.verifiedWithoutTimestamp`). |
+| 3 | `onboarding_completed` | `user_profiles.onboarding_completed = true` | **Not derivable** — see below |
+| 4 | `psychometric_resolved` | `psychometric_test_completed = true` **OR** `psychometric_test_skipped = true` **OR** a `psychometric_test_results` row exists | `min(psychometric_test_results."createdAt") − signup`, **completions only** |
+| 5 | `first_action` | The first row in the **ENGAGED union** at or after signup | `firstAction − signup` |
+
+Stage 4 accepts three conditions on purpose: the profile flag and the results table
+can disagree (a result row written before the flag existed), and the question being
+answered is *"is this user past the psychometric gate?"*, not *"is this boolean
+true?"*. `detail` splits `completed` / `skippedOnly` / `withResultRow`.
+
+Stage 5 **reuses the ENGAGED union already defined in `SmeAnalyticsService`** rather
+than inventing a second definition of "active" — `simulation_attempts`,
+`user_content`, `user_question_attempts`, `custom_tasks` *(`source_id IS NULL` only —
+rows with a source_id are auto-seeded planner content and would make everyone look
+converted)*, `psychometric_test_results`, `user_document_progress`. That means
+`/onboarding-funnel` and `/analytics/dau` can never disagree about what an engaged
+user is.
+
+### ⚠️ Three of the five stages have no timestamp, and the response says so
+
+`onboarding_completed` returns:
+
+```jsonc
+"timeToReach": {
+  "derivable": false,
+  "reason": "NOT derivable. user_profiles has no onboarding_completed_at column; updated_at is bumped by every later profile write, so using it would be a fabrication.",
+  "sample": 0, "medianSeconds": null, "p90Seconds": null
+}
+```
+
+Do **not** synthesise this client-side from `updated_at`. An explicit psychometric
+**skip** is likewise a bare boolean with no instant anywhere, so stage 4's median
+describes completers only and `sampleCoveragePct` says what share that is.
+Percentiles are **nearest-rank**, so a p90 is always a conversion that really
+happened.
+
+### ⚠️ The funnel is not strictly ordered, and that is reported, not hidden
+
+Stages are current-state conditions, so a user can satisfy stage *n* without stage
+*n−1* (onboarded without a verified phone, say). Two fields make that visible:
+
+* `reachedWithoutPrevious` — cohort members past this stage but not the previous one;
+* `droppedFromPrevious` — **raw** `previous.reached − reached`, which is therefore
+  allowed to go **negative**. Clamping it to zero would hide real data drift.
+
+### ⚠️ Conversion is measured as of NOW
+
+The window selects **who is in the cohort by signup date**; every downstream stage is
+then evaluated at request time — the same stance as `/sme/analytics/retention`. So
+re-running a historical window next month can legitimately show *higher* conversion,
+and signups from the last day or two drag the tail stages down because they have not
+had time to convert yet. For a matured read, set an explicit `to` a few days back.
+
+### Query
+
+| Param | Default | Notes |
+|---|---|---|
+| `days` | `30` | Max **365** (`user_auth` has full history). Selects the signup cohort. |
+| `from` / `to` | — | ISO datetime, or a bare `YYYY-MM-DD` read as an **IST** calendar date. The 365-day span is enforced even when both are supplied. |
+
+### Response (abridged)
+
+```jsonc
+{
+  "cohort": { "from": "…", "to": "…", "windowDays": 30, "signups": 412, "capped": false, "cap": 20000 },
+  "summary": {
+    "cohortSignups": 412,
+    "biggestDropStage": "onboarding_completed",
+    "biggestDropLabel": "Onboarding completed",
+    "biggestDropCount": 137, "biggestDropPct": 41.5,
+    "endToEndConversionPct": 38.1,
+    "note": "137 of 412 signups (41.5% of the previous stage) are lost at \"Onboarding completed\" — the largest single drop. End to end, 38.1% of signups reach a genuine product action."
+  },
+  "stages": [{
+    "key": "phone_verified", "label": "Phone verified", "order": 2,
+    "definition": "user_auth.phone_verified = true (current state).",
+    "reached": 330, "reachedPctOfSignupsPct": 80.1,
+    "conversionFromPreviousPct": 80.1, "droppedFromPrevious": 82, "dropOffPct": 19.9,
+    "reachedWithoutPrevious": 0,
+    "timeToReach": {
+      "derivable": true, "reason": null, "sample": 328, "sampleCoveragePct": 99.4,
+      "medianSeconds": 41.5, "p90Seconds": 512, "medianLabel": "42s", "p90Label": "8.5m"
+    },
+    "detail": { "verifiedWithoutTimestamp": 2 }
+  }],
+  "byDay": [{
+    "day": "2026-07-24", "signups": 18, "phoneVerified": 4,
+    "onboardingCompleted": 3, "psychometricResolved": 3, "firstAction": 2,
+    "phoneVerifiedPct": 22.2,
+    "authEvents": { "loginAttempt": 210, "loginSuccess": 150, "loginFailed": 12, "otpSendFailed": 3, "otpVerifyFailed": 47 }
+  }],
+  "authEvents": {
+    "available": true, "totalEvents": 430, "totalFailures": 80,
+    "byType": [{ "eventType": "otp_verify_failed", "count": 30, "distinctIdentifiers": 22, "isFailure": true }],
+    "zeroMeansNoDataNotNoFailures": false,
+    "interpretation": "…",
+    "otpFailureRate": { "derivable": false, "reason": "…no otp_sent / otp_verify_success counterpart…" },
+    "loginSuccessRatePct": 75,
+    "correlation": {
+      "derivable": true, "minSignupsPerDay": 5,
+      "worstDay": { "day": "2026-07-24", "signups": 18, "phoneVerified": 4, "phoneVerifiedPct": 22.2, "loginFailed": 12, "otpSendFailed": 3, "otpVerifyFailed": 47 },
+      "medianOtpVerifyFailedPerDay": 2,
+      "note": "2026-07-24 (IST) had the worst phone-verification conversion: 4/18 (22.2%). That day saw 47 otp_verify_failed and 3 otp_send_failed events, against a per-day median of 2 otp_verify_failed — a spike worth chasing."
+    },
+    "dailyRowCapHit": false, "identifierRowCapHit": false
+  },
+  "meta": { "conversionMeasuredAsOf": "…", "stageDefinitions": { … }, "cohortRowCapHit": false, "caveats": [ … ] }
+}
+```
+
+`authEvents.correlation` is the whole reason this endpoint is worth building: it
+names the covered IST day with the **worst phone-verification conversion**, puts that
+day's OTP/login failure counts beside it, and compares them to the per-day median so
+you can tell a spike from background noise. It needs ≥5 signups on a day before it
+will name one — below that it says `derivable: false` rather than pointing at a day
+where two people happened not to verify.
+
+### ⚠️ There is no OTP failure *rate*
+
+`AUTH_EVENT_TYPES` has **no `otp_sent` and no `otp_verify_success`**, so an OTP
+failure count has no denominator — nothing records how many OTPs were sent or
+verified successfully. The response returns
+`otpFailureRate: { derivable: false, reason: … }`. **Do not synthesise one
+client-side.** `login_attempt` → `login_success` *is* a real pair, which is the only
+reason `loginSuccessRatePct` exists.
+
+### Caveats
+
+* `byDay[].authEvents` is **app-wide** for that IST day, not restricted to that day's
+  signup cohort — a pre-auth failure has no user id to restrict by. Read it as a
+  same-day environmental signal, not as "these signups failed".
+* `psychometric_test_results` is a **member** of the ENGAGED union, so a user whose
+  only action was the psychometric test satisfies **stage 5 with the very row that
+  satisfied stage 4**. `stages[4].detail.bySource` shows how many — if that source
+  dominates, the "first real action" number is thinner than it looks.
+* An action timestamped **before** its account existed is dropped rather than counted
+  as an instant conversion; same for a `phone_verified_at` that precedes signup.
+* `auth_events` rows are purged after **90 days**, so a window longer than that loses
+  its own tail on top of the capture-start floor.
+* Caps: 20 000 cohort rows (newest signups first), 25 000 first-action rows per
+  ENGAGED source, 20 000 `auth_events` rows for the day series, 20 000 distinct
+  identifier rows. Each one reports itself in `meta` when it bites; `byType` totals
+  are exact (a DB-side aggregate) even when the day series is capped.
+
+---
+
+## 5. Performance stance (shared by all four)
 
 These reads share the **production database the mobile app runs on**. So:
 
@@ -386,16 +605,22 @@ These reads share the **production database the mobile app runs on**. So:
 
 ---
 
-## 5. Known gaps worth fixing (not fixed here — schema changes)
+## 6. Known gaps worth fixing (not fixed here — schema changes)
 
 | Gap | Impact | Fix |
 |---|---|---|
-| `notification_history` has no `read_at` | time-to-read is permanently underivable | nullable `read_at`, stamped in the same `markFeedSeen` `updateMany` |
+| `notification_history.read_at` exists *(done, `c146d94`)* but records a **bulk feed open**, and pre-migration rows are NULL | time-to-read is still not quotable per notification | let post-migration history accumulate, then surface `read_at − sent_at` as "time until the recipient came back", never as "time to open this push"; a real per-notification metric needs an open event |
 | `notification_history` has no index on `(type, createdAt)` | §3 is a sequential scan | add the index |
 | `user_question_attempts` has no index on `updated_at`/`created_at` | §1 content pool is a sequential scan | add `@@index([updatedAt])` |
 | `simulation_answers` has no timestamp | §1 must fan out through `simulation_attempts` | add `createdAt` |
 | `simulation_attempts` has no index on `startedAt` | that fan-out is a sequential scan | add `@@index([startedAt])` |
 | No "exam" dimension on either question bank | cannot filter question-quality by exam | out of scope; product decision |
+| **`user_profiles` has no `onboarding_completed_at`** | §4 stage 3 time-to-reach is permanently underivable — the single biggest hole in the funnel | nullable `onboarding_completed_at`, stamped where `onboarding_completed` is first set to true |
+| **`user_profiles` has no `psychometric_skipped_at`** | §4 can count skippers but never time them | nullable `psychometric_skipped_at` |
+| **No `otp_sent` / `otp_verify_success` event type** | §4 can report OTP failure *counts* but never a *rate* | add both to `AUTH_EVENT_TYPES` and emit them from the client alongside the failures |
+| **No server-side emitter for `login_*` / `otp_verify_failed`** *(`otp_send_failed` is DONE — `OtpService.emitOtpSendFailed`)* | §4's login signal is blind until a mobile release ships | emit `otp_verify_failed` and the `login_*` pair from the backend auth path too, so no part of the signal depends on an app release |
+| **`user_auth` has no index on `createdAt`** | §4's cohort read is a sequential scan of `user_auth` | add `@@index([createdAt])` |
+| `user_content` / `user_document_progress` have no `created_at`-leading index | §4's first-action group-bys are bounded sequential scans | add `@@index([createdAt])` to each |
 
 ---
 
