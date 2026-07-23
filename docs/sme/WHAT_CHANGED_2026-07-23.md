@@ -79,18 +79,23 @@ Replaces today's congested sidebar drawer on `/app-users` with a dedicated page.
 
 ## Status — what you can actually call today
 
-**The backend deploy was still in progress when this bundle was written — do not assume the
-endpoints are live.** Check before you start integrating, with a keyless request:
+**The backend is DEPLOYED and the endpoints are live** — verified 2026-07-23 (all
+`/sme/users/:id/*` routes return a steady 401 without a key, and the migration columns are
+confirmed present on production via `information_schema`).
+
+You can re-confirm any time with a keyless request:
 
 ```bash
 curl -s -o /dev/null -w '%{http_code}\n' \
   https://app.stanzasoft.ai/api/v1/sme/users/00000000-0000-0000-0000-000000000000/snapshot
 ```
 
-- **401** → deployed and guarded. You're good to go (add your `x-api-key`).
-- **404** → not deployed yet. Design against the contract, but hold off on integration testing.
+- **401** → deployed and guarded. You're good to go (add your `x-api-key`). ← current state
+- **404** → not deployed. Design against the contract, but hold off on integration testing.
 
-At the time of writing this returned **404**. Ask before assuming it has changed.
+**Request history begins 2026-06-30** (measured on production, ~167k rows). Note it is a
+**rolling 30-day window** — raw rows are purged nightly — so that start date moves forward
+daily. Re-run `SELECT min(created_at) FROM api_usage;` rather than hardcoding it.
 
 **Mobile-sourced signals are not live yet.** Client errors, the paywall/purchase funnel, app
 session events and push-permission state only start flowing once the next app release ships
