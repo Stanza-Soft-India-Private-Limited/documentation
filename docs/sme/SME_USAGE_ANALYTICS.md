@@ -70,6 +70,36 @@ Paginated; users active within 90 days but **silent for ≥`inactiveDays`**. Row
 
 ---
 
+## 4b. Release & messaging health (see [SME_INSIGHTS_API.md](./SME_INSIGHTS_API.md))
+
+Two further `/sme/analytics/*` endpoints live in their own doc because their caveats
+are load-bearing:
+
+### `GET /sme/analytics/release-health?days=14&platform=`
+Per **app version × platform**: `activeUsers, requests, errors4xx, errors5xx, errorRatePct,
+errorRateExcludingPaywallPct, clientErrors, clientErrorsPerActiveUser, adoptionSharePct`
+plus a `comparison` against the next-older build (`verdict ∈ better|worse|similar|insufficient_data`)
+and a per-platform rollup with `preHeaderSharePct`. Supplies the number behind an
+`AppConfig.minAppVersion` force-update decision.
+⚠️ `app_version IS NULL` **is** the pre-1.7 cohort (the header shipped with 1.7) and is
+reported as its own labelled bucket — never dropped. ⚠️ `app_version`/`platform`/`status`
+exist only on **raw** `api_usage`, so the window is hard-capped at **30 days**.
+
+### `GET /sme/analytics/notification-effectiveness?days=30`
+Per notification `type` and per IST day: `sent, read, maturedSent, maturedRead,
+maturedReadRatePct, pending, wastedSends, recipients`, plus an explicit
+`worstPerformers` kill-list ranked by wasted sends.
+⚠️ **`isRead` is a bulk "opened the in-app feed" flag** set by `markFeedSeen`
+(`POST /notifications/feed/seen`) — **not** a per-push open, and push delivery is not
+tracked at all. ⚠️ **Time-to-read is not derivable** (no `read_at` column); the response
+says so explicitly. Rates are quoted on a **matured** sample only (default: rows ≥3 days old).
+
+> Note: the older `GET /sme/analytics/notifications` (§4 above) returns the flat
+> `{ sent, read, readRate }` with **no maturation split and no isRead caveat**. Prefer
+> `notification-effectiveness` for any decision.
+
+---
+
 ## 5. How it's stored & bounded (the "no time-bomb" guarantee)
 
 - **Capture** (`ApiUsageInterceptor`): one row per *authenticated* request — `userId, method, route TEMPLATE (no IDs/query/body/PII), status, durationMs, createdAt`. Batched + fire-and-forget, so it adds ~zero request latency. Public / `x-api-key` / webhook routes (no user) are skipped.
