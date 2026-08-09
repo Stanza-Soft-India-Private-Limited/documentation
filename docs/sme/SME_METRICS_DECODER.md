@@ -37,10 +37,13 @@ Powered by `GET /sme/analytics` — but this endpoint is **built by the portal**
 | **Total Users** | Count of every row in `user_auth`. | ⚠️ Portal fetches at most **6,000 users** (100/page × 60 pages). Past 6,000 this card silently stops growing — and so does every other number on this screen. |
 | **Premium Access** | Users with premium *access right now* = `SUBSCRIBED` and not expired, **OR** `ACTIVE` and still inside the 14-day trial. | Includes trials. This is "who can use paid features", not "who paid". |
 | **Paying Subscribers** | The `premiumState = 'Premium'` bucket = `SUBSCRIBED` and not expired. | The honest revenue-side number. Always ≤ Premium Access. |
-| **Revenue (captured)** | Sum of `CAPTURED` payment amounts, in ₹, **excluding** `MANUAL` grants. | Manual comps are shown separately in "Revenue by source" so the headline isn't inflated by free grants. |
+| **Revenue (captured)** | Sum of `CAPTURED` payment amounts, in ₹, **excluding** `MANUAL` grants. | Manual comps are shown separately in "Revenue by source" so the headline isn't inflated by free grants. ⚠️ This sums the **payment** ledger, not paid orders — see the note below. |
 | `x% onboarded` | Share of users with `user_profiles.onboarding_completed = true`. | Current state, not a cohort. |
 | `x% of users` (on Premium Access) | Premium Access ÷ Total Users. | |
 | `x% success` (on Revenue) | Captured payments ÷ all payment rows. | Denominator includes `CREATED`/`FAILED` attempts, so a user retrying three times drags it down. |
+
+> **Paid orders vs payments — the check that caught a real bug (2026-07-29).**
+> "Revenue (captured)" sums the **payments** table; "Order status → PAID" counts **orders**. They should agree. On 29 Jul they did not: 16 PAID orders against 14 payments. Two Razorpay purchases had been collected with no payment row, so ₹6,499 sat outside the revenue figure — and a refund on them could not have revoked premium, because `handleRefund` resolves the user through payment → order → userId. Root cause was ours, not the portal's: payment rows were only ever created by the client-called `/payments/verify`, both webhook handlers were update-only, and `verifyPayment` short-circuits on `premiumGrantedAt` — so a webhook-first purchase (routine on UPI intent, where the bank confirms before the user returns to the app) could never get a row. **Fixed** in `payments.service.ts` — both webhook handlers now call the idempotent `upsertCapturedPayment` — and **backfilled 2026-08-06** via `scripts/backfill-missing-razorpay-payments.sql`. The recurring-subscription path was never affected. Keep comparing these two numbers: it is the cheapest revenue-integrity check on the screen.
 
 ### Alert strips
 
@@ -256,13 +259,21 @@ Answers "should we force-update?". `GET /sme/analytics/release-health`. Default 
 
 ## 8. Known-wrong / misleading numbers (the short list)
 
-Fix list, roughly in order of how misleading they are today.
+**Status re-verified live against portal build v2.32.0 on 2026-07-29.** That release closed most of the labelling items the same morning. Verify against the live portal, never against a downloaded copy of the portal repo — the snapshot in `~/Downloads` carries no git history and goes stale within days.
 
-1. **Analytics → Apple "Events recorded" is inflated with Razorpay events.** The portal requests `/sme/webhooks?source=APPLE`, but its HTTP client replaces the whole query string with `page`/`limit`, dropping the filter. *Verified.* Fix is portal-side: pass `source` as a param, not baked into the path. The five lifecycle counters below it are unaffected.
-2. **Analytics is capped at 6,000 rows per list.** Total Users, revenue totals, signups-by-month and every bar on that screen quietly stop growing past that. **[portal-side]** — raise the page cap or move the aggregation to our backend.
-3. **"Paid orders need reconcile" is historically inflated** — `premiumGrantedAt` only exists from 2026-06-16, so every older paid order counts as unreconciled forever. Filter the alert to orders after that date.
-4. **Three different "premium" numbers across two screens** (Premium Access = paid + trial; Paying Subscribers = paid only; Engagement premium tier = has a future `premium_expires_at`). All three are individually correct. Label them explicitly on screen so they aren't read as a contradiction.
-5. **"Actions 30d" tooltip is wrong** — it claims screen opens and taps; we track neither. **[portal-side]** copy fix.
-6. **D7/D30 retention on a short window looks broken but isn't** — recent signups haven't lived long enough to qualify. Add an "cohort still maturing" note, or exclude signups younger than the horizon.
-7. **Anything on plane B ignores your window past ~30 days** — paywall hits, heatmap, release health. The window control implies more history than exists. Cap the picker at 30 days on those cards.
-8. **Auth-event zeros in the funnel are "not recorded", not "no failures"** for 4 of the 5 event types until the mobile build ships.
+### Still open
+
+1. **Analytics → Apple "Events recorded" is inflated with Razorpay events.** The portal requests `/sme/webhooks?source=APPLE`, but its HTTP client replaces the whole query string with `page`/`limit`, dropping the filter. **Proven:** the webhook ledger holds 30 events in total, its first row is `eventType: order.paid, source: razorpay`, and the Apple panel reports exactly 30. **[portal-side]** — pass `source` as a param rather than baking it into the path. The five lifecycle counters below it match on an `apple.` prefix and are unaffected.
+   ⚠️ Do not "prove" this by arithmetic: 3 + 11 + 3 = 17 against a total of 30 does **not** demonstrate a leak, because other legitimate `apple.*` types would explain the same gap. The proof is a razorpay row inside the ledger being counted.
+2. **Analytics is capped at 6,000 rows per list.** Total Users, revenue totals, signups-by-month and every bar on that screen quietly stop growing past that; failed pages are silently dropped too. Not biting yet — 3,989 users at ~68/day — but it starts truncating around **late August 2026**. **[portal-side]** — raise the page cap or move the aggregation to our backend.
+3. **Plane-B cards still over-promise their window.** Release Health is now capped to 7/14/30 and the heatmap carries a note, but **paywall hits still offers a 7/30/60/90 selector over ~30 days of data**.
+4. **The Onboarding Funnel's stage-5 breakdown renders `[object Object]` and `NaN%`** — the portal is stringifying an array of objects. Still present on v2.32.0. The 1,079 headline above it is sound.
+
+### Closed
+
+5. ~~**"Paid orders need reconcile" is historically inflated**~~ — `premiumGrantedAt` only exists from 2026-06-16. Addressed by labelling: the Orders tab now explains that an order predating the field can look unreconciled even though premium was granted.
+6. ~~**Three different "premium" numbers across two screens**~~ — the Engagement screen now states outright that its tier means "premium expiry > now, so active trials count as free — a different rule from Analytics' two premium figures".
+7. ~~**"Actions 30d" claims screen opens and taps**~~ — replaced with the actual list of counted features, plus an explicit "screen opens and taps are not tracked".
+8. ~~**D7/D30 retention looks broken on a short window**~~ — the screen now says so itself: "Anyone who signed up fewer than N days ago cannot qualify yet but still counts in the cohort … Not a broken metric."
+9. ~~**Auth-event zeros in the funnel**~~ — capture is live and reporting (140 attempts / 117 successes on 29 Jul); pre-capture days render as "not rec." rather than 0.
+10. ~~**Two Razorpay payments missing from the ledger**~~ — ours, not the portal's. Fixed in `payments.service.ts` and backfilled 2026-08-06. See the note under §1.

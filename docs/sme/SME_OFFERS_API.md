@@ -4,6 +4,10 @@ Create, schedule and kill promotional pricing campaigns without an app release. 
 live, users who tap *Try Premium* (or open a share link) see the campaign paywall; when it is not,
 they see the normal pricing screen. We expose the endpoints — the SME team builds the UI.
 
+**A campaign now changes what customers are actually charged.** Read §0 before authoring one: a
+single field (`priceInPaise`) is real money, and iOS needs an App Store Connect offer code
+configured alongside it (§9) or iPhone users never see the discount.
+
 **Base URL:** `https://app.stanzasoft.ai/api/v1`
 **Authentication:** `x-api-key: <API_KEY_SECRET>` on every `/sme/*` route
 **Swagger:** `/api/docs` → tag **SME**
@@ -55,9 +59,58 @@ standard paywall rather than an error, because links reliably outlive campaigns.
 **Users who already pay are never shown an offer.** The resolver checks premium status first and
 returns the standard paywall regardless of the code.
 
-**Prices are display strings, not amounts.** `"₹4990"` is rendered verbatim by the app. The current
-build does not charge from these values — the buy flow still uses the configured base pricing. Do
-not treat a campaign as a live discount until the payment integration lands.
+**A campaign carries two different kinds of price, and only one of them is money.** `price`,
+`strikePrice`, `period`, `strikePeriod`, `subtitle` and `badge` are **display strings**: rendered
+verbatim on the screen and *never* parsed into an amount. **`priceInPaise` is the only field that
+changes what a customer is charged** — an integer in paise, so `499000` means ₹4,990.
+
+- **Omit `priceInPaise` and the campaign is presentation-only.** The screen advertises a discount
+  and checkout charges the standard price. That is a legitimate mode (a "look what's coming"
+  campaign), but it is almost never what you want — it means a user who reads "₹4,990" pays the
+  full price.
+- **It must be *below* the standard plan price.** A campaign priced at or above standard is refused
+  as a discount: the backend logs an error and charges standard. This exists so a typo
+  (`5900000` instead of `590000`) cannot charge a user *more* than the normal price while the screen
+  tells them they are saving money.
+- **Keep the display string and `priceInPaise` in agreement yourself.** Nothing cross-checks them.
+  `"price": "₹4,990"` with `"priceInPaise": 199000` will happily show ₹4,990 and charge ₹1,990.
+
+**Discounts are yearly-only.** Author `priceInPaise` on the yearly tier only. The monthly tier is
+listed at the standard price with no `strikePrice` and no `priceInPaise`, so the campaign screen
+shows it plainly with no strikethrough. There is no monthly discount to configure.
+
+**The discount shape is "pay up front, then renew at standard"** — but it is delivered differently
+on each platform, and the difference is visible to customers.
+
+| | Android / web | iOS |
+|---|---|---|
+| A campaign purchase is | a **one-time payment** at the campaign price | a **subscription** with an App Store Connect **Offer Code** |
+| After the first year | does **not** auto-renew; the customer is reminded and re-buys at standard | auto-renews at the standard price |
+| A standard-price purchase is | a real auto-renewing subscription | a subscription |
+
+**Why Android campaigns are one-time.** Razorpay cannot charge a discounted first cycle and then
+renew at standard. Verified against their live API on 2026-08-06: the first invoice is created
+inside the subscription-create call (so an upfront addon always arrives too late to be billed), and
+`PATCH /subscriptions/:id` is rejected outright for UPI mandates — which is how most Indian
+customers pay. Rather than advertise a renewal behaviour we cannot honour, a campaign is sold as a
+single payment. Apple has no such limitation, so iOS keeps a proper discounted subscription.
+
+**Every checkout path reads a campaign now.** The Razorpay **one-time order** flow re-resolves the
+campaign server-side and charges `priceInPaise`, recording `offerCode` and the list price on the
+order so campaign revenue stays attributable. The Razorpay **subscription** flow is standard-price
+only and will **refuse** a request carrying a campaign code, so a campaign can never be silently
+charged at full price. iOS applies the discount through the ASC offer code. The client decides the
+campaign code it sends, but never the amount — the server re-resolves it, so a user cannot claim a
+discount they are not entitled to.
+
+**Apple cannot combine a discount with free months**, which is why campaigns discount the price
+instead of adding bonus months. Do not author a campaign whose copy promises "12 + 2 months free" —
+see `bonusDays` in §3.
+
+**Without an `appleOfferCode`, iPhone users see the STANDARD paywall for that campaign.** This is
+deliberate, not a bug: iOS can only discount through an offer code configured in App Store Connect,
+and we will not show a price we have no way of charging. Android and web see the campaign either
+way. Section §9 is the per-campaign checklist that keeps the two sides in step.
 
 **Dates:** send ISO-8601 with an explicit offset — `2026-08-16T00:00:00+05:30` for midnight IST.
 They are stored as UTC instants and compared as instants, so an IST-evening boundary behaves
@@ -127,15 +180,18 @@ POST /sme/offers
 
 | Field | Type | Description |
 |---|---|---|
-| `id` | string, required | `"yearly"` / `"monthly"` |
+| `id` | string, required | `"yearly"` / `"monthly"`. Checkout matches `yearly`/`annual`/`year` and `monthly`/`month`; any other spelling means the tier is never matched and the user is charged standard price |
 | `title` | string, required | Pill label on the card |
-| `price` | string, required | Display price, e.g. `"₹4990"` |
+| `price` | string, required | **Display** price, e.g. `"₹4,990"`. Rendered verbatim, never parsed |
 | `period` | string, required | Suffix, e.g. `"/year"` |
-| `strikePrice` | string \| null | Struck-through original |
+| `strikePrice` | string \| null | Struck-through original. Display only |
 | `strikePeriod` | string \| null | Suffix for the struck price |
-| `subtitle` | string \| null | e.g. `"12+2 Months"` |
+| `subtitle` | string \| null | e.g. `"First year"` |
 | `badge` | string \| null | e.g. `"Best value"` |
-| `bonusDays` | int 0–3650 | Extra entitlement days. Honoured literally on Android/web once payments land; on iOS it is **display-only** — Apple owns the billing period, so a matching App Store Connect offer must be configured separately |
+| `priceInPaise` | int ≥ 0, optional | **The real charge, in paise** — `499000` = ₹4,990. The only field that changes what a customer pays. Applies to the **first period only**. On iOS renewals go back to standard automatically; on Android/web a campaign purchase is one-time and does not renew at all. Must be **below** the standard price for that plan or the discount is refused and standard is charged. Omit it → presentation-only campaign. **Yearly tier only.** Set it to the same amount as the ASC offer code (§9) |
+| `appleOfferCode` | string, optional | The App Store Connect **Offer Code** this campaign redeems on iOS. Uppercase `A–Z0–9`, max 64 chars, e.g. `FREEDOM79`. **Omit it and iPhone users get the standard paywall for this campaign** — they never see the discounted screen |
+| `appleProductId` | string, optional | The ASC product the offer code belongs to, e.g. `com.prepmonkey.premium.yearly`. Required alongside `appleOfferCode` — an offer code is only meaningful against its product |
+| `bonusDays` | int 0–3650 | Extra entitlement days added on top of the plan duration. **Honoured on Razorpay today** (granted once, on the first paid cycle only — renewals do not repeat it). **Currently unused**: the pay-up-front discount shape cannot carry free months on Apple, so campaigns discount the price instead. Leave it at `0` and keep the copy free of "+2 months" claims. It stays documented for a future free-trial-style campaign |
 | `isDefault` | boolean | The plan selected when the screen opens. **At most one** plan may set it |
 
 **`content`** — every field optional; anything omitted falls back to the standard paywall's copy:
@@ -156,11 +212,14 @@ POST /sme/offers
   "endsAt": "2026-08-16T00:00:00+05:30",
   "heroImageUrl": null,
   "plans": [
-    { "id": "yearly", "title": "Yearly", "price": "₹4990", "period": "/year",
-      "strikePrice": "₹5990", "strikePeriod": "/year", "subtitle": "12+2 Months",
-      "badge": "Best value", "bonusDays": 60, "isDefault": true },
-    { "id": "monthly", "title": "Monthly", "price": "₹421", "period": "/month",
-      "strikePrice": "₹569", "strikePeriod": "/Month", "bonusDays": 0 }
+    { "id": "yearly", "title": "Yearly", "price": "₹4,990", "period": "/year",
+      "strikePrice": "₹5,900", "strikePeriod": "/year", "subtitle": "First year",
+      "badge": "Best value",
+      "priceInPaise": 499000,
+      "appleOfferCode": "FREEDOM79", "appleProductId": "com.prepmonkey.premium.yearly",
+      "bonusDays": 0, "isDefault": true },
+    { "id": "monthly", "title": "Monthly", "price": "₹569", "period": "/month",
+      "strikePrice": null, "strikePeriod": null, "bonusDays": 0 }
   ],
   "content": {
     "badgeText": "Independence Day Offer",
@@ -182,8 +241,14 @@ POST /sme/offers
 
 Returns the created campaign (status `DRAFT`).
 **Errors: 400** duplicate code · inverted window · a plan missing `id`/`title`/`price`/`period`
-(the message names the index) · more than one `isDefault` · `bonusDays` out of range.
+(the message names the index) · more than one `isDefault` · `bonusDays` out of range ·
+`priceInPaise` not a non-negative integer · `appleOfferCode` not uppercase `A–Z0–9` / over 64 chars.
 **Audit:** `OFFER_CREATE` (id, code, name).
+
+> ⚠️ A `priceInPaise` **at or above** the standard price is accepted on write — it is only rejected
+> at checkout, where the discount is dropped and standard price charged. Nothing on the create call
+> tells you this campaign will not discount, so double-check the number against the live standard
+> price before you activate.
 
 ## 4. Update a campaign
 
@@ -196,6 +261,15 @@ Accepts `name`, `startsAt`, `endsAt`, `heroImageUrl`, `plans`, `content`. Tri-st
 
 Sending `code` is rejected with an explicit message rather than a generic validation error.
 Moving the window of a `SCHEDULED`/`LIVE` campaign re-runs the overlap check.
+
+> ⚠️ **`plans` is replaced wholesale, not merged.** Send the *complete* tier objects every time —
+> re-sending a tier without `priceInPaise`/`appleOfferCode` silently turns a live discount into a
+> presentation-only campaign that keeps advertising the discounted price. This is the same
+> send-every-field rule that applies to the other SME PATCH endpoints.
+>
+> Note also that the audit snapshot records code, name, status, window and hero — **not the plans**.
+> A price edit is therefore not reconstructible from `sme_audit_log` alone; if a campaign's price is
+> in dispute, the charge itself (order/payment rows) is the record of truth.
 
 **Errors: 400** attempted code change · inverted window · overlap · invalid plans. **404** unknown id.
 **Audit:** `OFFER_UPDATE` (before/after of code, name, status, window, hero).
@@ -275,6 +349,37 @@ unpublished campaign on a real device, append `?code=<CODE>&preview=1` **and** s
 Without a valid api key the `preview` flag is ignored — otherwise any user could append it and read
 unreleased pricing.
 
+## 9. What SME must do per campaign
+
+A discounted campaign is configured in **two places** — App Store Connect and this API — and they
+must agree. Do them in this order:
+
+1. **Create the Offer Code in App Store Connect first.** On the yearly subscription product, add a
+   one-time-use-free **Offer Code** with a **pay-up-front** discount for the first year at the
+   campaign price. Cover new, active and lapsed customers — one offer code does all three.
+2. **Put that code on the campaign.** Set `appleOfferCode` to the ASC code (uppercase `A–Z0–9`,
+   e.g. `FREEDOM79`) and `appleProductId` to the product it belongs to, on the **yearly** tier.
+3. **Set `priceInPaise` to the SAME amount you configured in ASC.** `499000` for ₹4,990. This is
+   what Android and web are charged; ASC is what iOS is charged. They are two independent
+   configurations of one number.
+4. **Set the display strings to match** — `price`, `strikePrice` and any price mentioned in
+   `content`. Nothing validates the copy against the amount.
+5. **Preview it** (§8) on a real device before activating, then `POST :id/activate`.
+
+> 🔴 **If ASC and `priceInPaise` disagree, iPhone users are charged the ASC amount while the screen
+> shows the campaign amount.** The backend detects the mismatch on the receipt and logs a drift
+> alert — but the customer has already paid by then. There is no way to catch this before the
+> charge, which is why step 3 is a copy-paste and not a re-derivation. Android and web are always
+> charged `priceInPaise`, so a mismatch also means the two platforms charge different prices for the
+> same campaign.
+
+**Why Offer Codes and not Apple's other offer types.** Apple's *introductory* offers reach only
+customers who have never subscribed; *promotional* offers reach only existing and lapsed ones. Each
+covers about half the audience, so a single campaign would need two configurations kept in lockstep
+plus server-side cryptographic signing of every promotional offer. **Offer Codes replace both** —
+one configuration, all three customer states, no signing. Do not configure introductory or
+promotional offers for a campaign; they are not part of this flow.
+
 ---
 
 ## Common errors
@@ -287,7 +392,11 @@ unreleased pricing.
 | 400 | `Window overlaps live campaign X` | Pause or end X first, or choose a non-overlapping window |
 | 400 | `is ENDED, which is terminal` | Ended/archived campaigns never come back — use **pause** next time |
 | 400 | `plans[n].period is required` | Every plan needs `id`, `title`, `price`, `period` |
+| 400 | `priceInPaise must be an integer` | Paise, not rupees, and no decimals — ₹4,990 is `499000` |
+| 400 | `appleOfferCode` rejected | Uppercase `A–Z0–9` only, max 64 chars — no spaces, hyphens or lowercase |
 | 401 | Missing/invalid `x-api-key` | Check the header name and secret |
+| — | Campaign is live but nobody is discounted | `priceInPaise` missing, at/above standard price, or the tier `id` is not one of `yearly`/`annual`/`year`/`monthly`/`month`. All three are server-log-only — the API returns success |
+| — | Discount works on Android, iPhone shows standard price | `appleOfferCode`/`appleProductId` missing on the yearly tier, or the ASC offer code is not live yet |
 | 404 | Unknown offer id | It may have been archived — list with `?status=ARCHIVED` |
 | 503 | Storage not configured | `S3_BUCKET` / `S3_PUBLIC_BASE_URL` not set on the server |
 

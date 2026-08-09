@@ -191,7 +191,7 @@ Read-only. Razorpay **and** Apple data. Amounts in rupees.
 
 ### 2.1 List payments
 ```
-GET /sme/transactions?page=1&limit=20&userId=&paymentStatus=&source=&startDate=&endDate=&search=
+GET /sme/transactions?page=1&limit=20&userId=&paymentStatus=&source=&startDate=&endDate=&search=&includeTest=
 ```
 | Query | Description |
 |---|---|
@@ -200,6 +200,7 @@ GET /sme/transactions?page=1&limit=20&userId=&paymentStatus=&source=&startDate=&
 | userId | payments for one user |
 | startDate / endDate | ISO date bounds on `createdAt` |
 | search | razorpay payment id / payer email / user email |
+| includeTest | `true` to include App Store **sandbox** purchases. Default **false** — see the note under §2.3. |
 
 **Response 200** `data[]`:
 ```json
@@ -220,13 +221,29 @@ Same shape + `notes`. `404` if not found.
 
 ### 2.3 List orders / order detail
 ```
-GET /sme/orders?page=&limit=&userId=&orderStatus=&source=&startDate=&endDate=&search=
+GET /sme/orders?page=&limit=&userId=&orderStatus=&source=&startDate=&endDate=&search=&includeTest=
 GET /sme/orders/:id
 ```
 `orderStatus` ∈ CREATED, PAID, FAILED, CANCELLED. Each order includes its `payments[]`,
-`planType`, `paymentSource`, and **`premiumGrantedAt`**. **Reconcile workflow:** an order
+`planType`, `paymentSource`, **`premiumGrantedAt`**, **`offerCode`**, **`listAmount`** (₹,
+pre-discount, null when unknown) and **`isTest`**. **Reconcile workflow:** an order
 with `status=PAID` but `premiumGrantedAt=null` is a payment that never granted premium →
 grant it via §1.6 (the Razorpay webhook now also auto-grants, so new ones self-heal).
+
+> **Sandbox orders are hidden by default.** iOS sandbox purchases reach the production
+> backend (Apple has no separate endpoint), so every payment test writes a genuine PAID
+> order at the real price — one evening of testing produced ₹59,000 of phantom revenue.
+> Those orders carry `isTest: true` and are excluded from `/sme/orders` **and**
+> `/sme/transactions` unless you pass `includeTest=true`. Since the portal computes
+> revenue by summing these lists, the default is what keeps the headline honest.
+> Detail reads (`/sme/orders/:id`, `/sme/transactions/:id`) and a user's `recentOrders`
+> are never filtered — they show `isTest` instead.
+
+> **Apple amounts are what Apple charged.** An App Store offer-code redemption is billed
+> below list price; the order records the charged amount in `amount` and the list price in
+> `listAmount`, with `offerCode` set to the campaign it was bought under. On older
+> transactions (pre-2023) and non-INR storefronts Apple does not tell us the charged
+> amount — those fall back to the configured price with `listAmount: null`.
 
 ### 2.4 Webhook / provider events
 ```
