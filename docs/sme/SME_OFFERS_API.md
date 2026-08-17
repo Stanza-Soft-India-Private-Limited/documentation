@@ -262,10 +262,20 @@ Accepts `name`, `startsAt`, `endsAt`, `heroImageUrl`, `plans`, `content`. Tri-st
 Sending `code` is rejected with an explicit message rather than a generic validation error.
 Moving the window of a `SCHEDULED`/`LIVE` campaign re-runs the overlap check.
 
-> ⚠️ **`plans` is replaced wholesale, not merged.** Send the *complete* tier objects every time —
-> re-sending a tier without `priceInPaise`/`appleOfferCode` silently turns a live discount into a
-> presentation-only campaign that keeps advertising the discounted price. This is the same
-> send-every-field rule that applies to the other SME PATCH endpoints.
+> ✅ **`plans` and `content` are MERGED, not replaced** (since 2026-08-17). A tier in the payload is
+> merged into the stored tier with the same `id`: an **omitted** key keeps its stored value, and only
+> an **explicit** value — including an explicit `null` — overwrites. `content` merges the same way,
+> one level deep. The array you send still defines the **set and order** of tiers, so omitting a tier
+> removes it and adding one appends it; inheritance applies only *within* a matched tier.
+>
+> This exists because the portal's offer form has no `priceInPaise` / `appleOfferCode` /
+> `appleProductId` input. Under the old replace-wholesale behaviour, saving an unrelated edit deleted
+> those keys and the campaign kept advertising its discounted price while charging the standard one —
+> which happened to the live `FREEDOM15` campaign on 2026-08-15 and went unnoticed for two days
+> because nothing errors. **A client must never be able to delete a field it doesn't know exists.**
+>
+> Validation runs on the **merged** result, so an inherited price is still checked against the
+> standard price — a partial payload cannot smuggle in an invalid state.
 >
 > Note also that the audit snapshot records code, name, status, window and hero — **not the plans**.
 > A price edit is therefore not reconstructible from `sme_audit_log` alone; if a campaign's price is
@@ -379,6 +389,17 @@ covers about half the audience, so a single campaign would need two configuratio
 plus server-side cryptographic signing of every promotional offer. **Offer Codes replace both** —
 one configuration, all three customer states, no signing. Do not configure introductory or
 promotional offers for a campaign; they are not part of this flow.
+
+---
+
+## 10. Who reached for the campaign and never paid
+
+`GET /sme/offers/:id/abandoned` — the recovery/drop-off surface for a campaign.
+
+**Covered in depth in its own guide: [SME_CAMPAIGN_ABANDONED_API.md](./SME_CAMPAIGN_ABANDONED_API.md).**
+Read it before building anything on this endpoint — every row carries a `signal` field that is a
+*confidence level*, not a category (`ORDER` is certain, `TAP` is inferred and iOS-only), and a UI
+that blends the two is misleading.
 
 ---
 
