@@ -20,9 +20,18 @@ two levels come from completely different places.
 
 | `signal` | Platform | Confidence | Where it comes from |
 |---|---|---|---|
+| `VIEW` | **all** | **Certain** | The user opened the **campaign paywall** and never created an order — "saw the offer and left". The server resolved the campaign for them, so this is an observation, not a client claim. **Added 2026-08-20.** |
 | `ORDER` | Android, web | **Certain** | An `orders` row stamped with the campaign code, never PAID. The Razorpay/web path writes this row *before* the checkout sheet opens, so the row **is** the Join tap. |
 | `TAP` | iOS only | **Inferred** | An `upgrade_tapped` / `checkout_opened` client event with `gateway = apple`. |
 | `BOTH` | — | Certain | The same user did both. |
+
+A user is counted at their **furthest** stage: someone who viewed *and* ordered is `ORDER`,
+not `VIEW`. So the four signals partition the audience — they never double-count.
+
+⚠️ **`VIEW` is deploy-forward.** Capture began 2026-08-20, when the paywall resolver started
+stamping the campaign code onto the usage row. There is **no history before that date** — a
+window that opens earlier under-reports views, and only views. Every other signal is complete
+for the full campaign history.
 
 **Why iOS is different, and why we cannot fix it.** Apple writes no order until a transaction
 *completes*. An iOS user who taps Join, sees the StoreKit sheet and backs out leaves **no order
@@ -49,13 +58,21 @@ x-api-key: <API_KEY_SECRET>
 
 | Param | Default | Notes |
 |---|---|---|
-| `signal` | `all` | `all` · `order` (certain only) · `tap` (inferred only) |
+| `signal` | `all` | `all` · `view` · `order` (certain only) · `tap` (inferred only) |
+| `from` | campaign start | ISO lower bound. **Clamped to the campaign window — a wider value cannot widen it**, so a number from this endpoint always describes this campaign. |
+| `to` | campaign end | ISO upper bound. Clamped the same way. |
 | `minAppVersion` | `1.8` | Dotted-numeric floor applied to the **iOS TAP signal only**. Pass `0` to disable. |
 | `page` | `1` | |
 | `limit` | `20` | max `100` |
 
-**There is deliberately no date parameter.** The code and the window are read off the campaign row.
-Letting the portal pass its own window would make a wrong answer indistinguishable from a right one.
+**`from`/`to` narrow, they never widen.** The code and the campaign window are read off the campaign
+row; a caller may scope *inside* that window but cannot reach outside it, so a wrong answer stays
+distinguishable from a right one.
+
+🔑 **Why you usually want `from`.** A campaign goes LIVE days before marketing actually sends the
+link — FREEDOM15 opened **10 Aug** but was not promoted until **14 Aug**. Nothing in the system
+records "when we launched", so the untrimmed window reports four days of internal setup traffic as
+demand. Pass `from` = the real promotion date.
 
 ### Why `minAppVersion` defaults to 1.8
 
@@ -78,7 +95,20 @@ version we cannot attribute cannot be shown to be campaign-capable.
     "startsAt": "2026-08-09T18:30:00.000Z",
     "endsAt":   "2026-08-23T18:29:00.000Z"
   },
-  "pageCounts": { "order": 1, "tap": 10, "both": 1 },   // THIS PAGE only, not the corpus
+  "window": { "from": "...", "to": "..." },   // what was actually queried, after clamping
+  "funnel": {                                 // CAMPAIGN-WIDE distinct users, not page-local
+    "viewed": 34,            // opened the campaign paywall (deploy-forward)
+    "joined": 9,             // created a campaign-priced order
+    "paid": 0,               // completed payment
+    "viewedNotJoined": 25,   // saw the offer and left  ← the "just visited" number
+    "paidByPlatform": { "apple": 0, "razorpay": 0 },
+    "revenuePaise": 0,
+    "discountGivenPaise": 0,        // actually handed over (only on PAID orders)
+    "discountUnclaimedPaise": 1531700,  // offered and never claimed
+    "orderCount": 17,        // ORDERS, not users — 9 users made 17 of them
+    "viewedIsDeployForward": true
+  },
+  "pageCounts": { "view": 0, "order": 1, "tap": 10, "both": 1 },   // THIS PAGE only
   "data": [
     {
       "userId": "45c3c221-e811-472b-912b-9fe4e3993b01",
@@ -134,9 +164,11 @@ relaxed without reading why.
 
 Read this section before promising a funnel chart to anyone.
 
-1. **"Viewed the offer screen but never tapped" does not exist on any platform.** `GET /paywall` is
-   not persisted per user, and `paywall_viewed` fires from the *standard* paywall screen, never from
-   `OfferScreen`. There is no view-stage number to chart.
+1. ~~"Viewed the offer screen but never tapped" does not exist.~~ **Solved 2026-08-20** — this is now
+   the `VIEW` signal and `funnel.viewedNotJoined`. The resolver stamps the campaign it matched onto
+   the usage row, so a view is server-observed on every platform. ⚠️ **Deploy-forward: there is no
+   history before 2026-08-20**, and it cannot be backfilled — the code was never stored. For anything
+   earlier, Mailchimp's click report is the only surviving record.
 2. **`platform` is best-effort and partly retroactive.** It is the user's most recent
    `api_usage.platform`, which comes from the `x-platform` header. **prepmonkey-web did not send that
    header until 2026-08-16**, so web activity before then reads as `null`, not `"web"`. For the
@@ -152,6 +184,24 @@ Read this section before promising a funnel chart to anyone.
 5. **No campaign-screen view count, no per-step drop-off.** Closing gaps 1 and 5 requires threading
    the offer code into the mobile funnel emitter and firing `paywall_viewed` from `OfferScreen` —
    a mobile release, and it would only collect data from that release forward. Nothing retroactive.
+
+---
+
+## 5b. The four denominators, and why they differ
+
+The single biggest source of confusion on this screen is that four true numbers describe the same
+campaign and none of them match. From the live FREEDOM15 window:
+
+| Number | Value | What it counts |
+|---|---|---|
+| `funnel.orderCount` | 17 | **orders** — one user can create several |
+| `funnel.joined` | 9 | **distinct users** behind those orders |
+| certain abandoners | 7 | those 9, minus users excluded by §4 (converted / granted) |
+| `funnel.viewed` | — | distinct users who opened the campaign paywall |
+
+**Always say which unit you are showing.** "17 orders from 9 users, 7 still worth chasing" is
+honest; "17" beside "7" with no bridge reads as a bug. The 9 → 7 gap is §4 doing its job — surface
+it as "2 excluded (already converted)", never as an unexplained drop.
 
 ---
 
@@ -190,6 +240,51 @@ distinct users, all on app 1.8.
 **Read the mix honestly: essentially all measurable abandonment in this campaign is iOS, and the iOS
 number is the inferred one.** The Android/web side is 2 users — small enough that it is a support
 list, not a statistic.
+
+---
+
+## 7b. Companion endpoint — who actually bought
+
+**`GET /api/v1/sme/offers/:id/purchased`** — the other end of the funnel. Same auth, same
+`from`/`to`/`page`/`limit`, same raw-response rule.
+
+🔑 **Attribution is `orders.offer_code = <campaign code>`, and nothing else.** That single rule is
+what stops general payment records bleeding into a campaign number:
+
+- an **Apple renewal at standard price** inside the campaign window carries no offer code → excluded
+- a **Razorpay subscription** taken at list price → excluded
+- a **MANUAL SME grant** → excluded (a comp is an adjustment, not a conversion)
+- **App Store sandbox** orders → excluded (`is_test`)
+
+This is deliberately *not* "Apple revenue between these dates", which is the shape that produces
+inflated campaign numbers. If a purchase is not stamped with the code, this campaign did not cause it.
+
+```jsonc
+{
+  "campaign": { … }, "window": { … },
+  "pageTotals": { "revenuePaise": 0, "savedPaise": 0 },   // page-local
+  "data": [
+    {
+      "userId": "…", "name": "…", "email": "…", "phoneNumber": "…",
+      "orderId": "…",
+      "source": "APPLE",              // or RAZORPAY — the till that charged
+      "amountPaise": 499900,          // charged
+      "listAmountPaise": 590000,      // pre-discount
+      "savedPaise": 90100,            // what the campaign actually gave away
+      "planType": "ANNUAL",
+      "orderedAt": "…", "premiumGrantedAt": "…", "premiumExpiresAt": "…",
+      "capturedPaise": 499900         // from the payments ledger; see below
+    }
+  ],
+  "total": 0, "page": 1, "limit": 20, "hasMore": false
+}
+```
+
+⚠️ **`capturedPaise: null` on a PAID row is a real signal, not a rendering gap** — it means the order
+was marked PAID without a captured payment row behind it. Surface it (a warning chip) rather than
+defaulting it to the order amount; that mismatch is exactly the class of problem this list should
+expose. Related: the known Razorpay payment-row gap, where a PAID order can legitimately lack a
+Payment row.
 
 ---
 
