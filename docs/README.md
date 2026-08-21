@@ -70,6 +70,7 @@ A NestJS-based backend API for a comprehensive UPSC Civil Services Examination p
 
 - [Architecture Guide](./ARCHITECTURE.md) - System design and patterns
 - [API Reference](./API.md) - Endpoint documentation
+- [Meta Conversions API](./meta-conversions-api.md) - Server-side Purchase/Subscribe events to Meta Events Manager, dedup against the client SDK, env vars
 
 ### Additional Resources
 
