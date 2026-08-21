@@ -59,6 +59,7 @@ Content-Type: application/json
 | body | ✅ | the message |
 | type | ➖ | deep-link type for tap routing (see §4). Default `home` |
 | id | ➖ | entity id forwarded in the payload (used by some `type`s) |
+| params | ➖ | extra deep-link arguments for the few `type`s that need more than an id — flat `{"key":"value"}` object, see §4.1 |
 
 **Response 200**
 ```json
@@ -90,7 +91,7 @@ x-api-key: <API_KEY_SECRET>
 ```json
 { "title": "New mock test live!", "body": "Attempt the 2026 Prediction Test now.", "type": "home" }
 ```
-Same body fields as §1 (no `:id` path param; `type`/`id` optional, `type` default `home`).
+Same body fields as §1 (no `:id` path param; `type`/`id`/`params` optional, `type` default `home`).
 
 **Response 200**
 ```json
@@ -122,7 +123,7 @@ x-api-key: <API_KEY_SECRET>
 |---|---|---|
 | segment | ✅ | `premium` \| `trial` \| `free` |
 | title / body | ✅ | as above |
-| type / id | ➖ | as above |
+| type / id / params | ➖ | as above |
 
 **Segment definitions (authoritative — live state, not the raw status column):**
 | segment | who |
@@ -145,42 +146,132 @@ time). For very large cohorts this can take a while — set a generous client ti
 
 ## 4. Deep-link `type` contract (tap routing)
 
-`type` (+ optional `id`) is forwarded in the FCM **data payload**; when the user taps,
-the app routes via `DeepLinkMapper.fromData`. **Only these values route** — anything
-else lands on **Home**:
+`type` (+ optional `id`, + optional `params`) is forwarded in the FCM **data payload**;
+when the user taps, the app routes via `DeepLinkMapper.fromData`. **Only these values
+route** — anything else lands on **Home**:
 
-| `type` | needs `id` | opens | universal link |
+### 4.1 Extra arguments — `params`
+
+A few screens need more than one id (a practice list needs *which filter*, a document
+list needs *which subject*). Those take a **`params`** object alongside `type`:
+
+```json
+{
+  "title": "Revise 2025 Prelims",
+  "body": "24 questions from last year's paper.",
+  "type": "practice_list",
+  "params": { "filterType": "year", "filterValue": "2025" }
+}
+```
+
+- Flat **string → string** only (no nesting, no numbers, no booleans — quote them).
+- **≤ 10 keys**, key ≤ 40 chars, value ≤ 256 chars, **≤ 1 KB** serialized.
+  (FCM's tightest data limit is 2 KB on a *topic* send, and `title`/`body`/`type`/`id`
+  already spend part of it. Over the cap → **400**, with the offending field named.)
+- **Optional everywhere.** Omit it and every `type` behaves exactly as it always has.
+- Unknown keys are ignored by the app; a missing *required* param degrades to the
+  fallback in the table below (never an error screen).
+- The universal-link equivalent is the **query string**:
+  `/open/practice_list?filterType=year&filterValue=2025`.
+
+### 4.2 Routable keys
+
+`id` column: ✅ = required (missing → the **fallback** column), ➖ = not used,
+"optional" = changes the destination when present.
+
+| `type` | `id` | `params` | opens | if `id`/`params` missing | universal link |
+|---|---|---|---|---|---|
+| `home` (default) | ➖ | — | Home / dashboard | — | `/open/home` |
+| `daily_task` | ➖ | — | Daily tasks (Home) | — | `/open/daily_task` |
+| `chat` | ➖ | — | Chat | — | `/open/chat` |
+| `chat_expert` | ➖ | — | Chat, **Expert (SME) mode** preselected | — | `/open/chat/expert` |
+| `mains` | ➖ | — | PYQ tab → **Mains** landing | — | `/open/mains` |
+| `mains_question` | ✅ questionId | — | that Mains question detail | Mains landing | `/open/mains/<id>` |
+| `reel` | optional reelId | — | that reel, playing | Reels feed | `/open/reel[/<id>]` |
+| `reelblog` | ✅ reelId | — | that reel's blog article | Reels feed | `/open/reelblog/<id>` |
+| `pyq` | ➖ | — | PYQ / Practice tab | — | `/open/pyq` |
+| `pyq_question` | ✅ questionId | — | that PYQ question (read-only) | PYQ tab | `/open/pyq/<id>` |
+| `simulation` | ✅ simulationId | — | Library → Simulation, highlighted (no auto-start) | Library | `/open/simulation/<id>` |
+| `doc` | ✅ documentId | — | that study document | Library | `/open/doc/<id>` |
+| `library` | ➖ | — | Library / My Content | — | `/open/library` |
+| `flashcards` | ➖ | — | Chat with the **flashcard generator** open | — | `/open/flashcards` |
+| `mnemonics` | ➖ | — | Chat with the **mnemonic generator** open | — | `/open/mnemonics` |
+| `saved` | ➖ | — | Saved questions | — | `/open/saved` |
+| `premium` | ➖ | — | Upgrade / paywall (campaign-aware) | — | `/open/premium` |
+| `offer` | ✅ campaign code | — | that campaign's paywall | standard paywall | `/open/offer/<code>` |
+| `report` | ✅ reportId | — | that feedback report's detail | Home | `/open/report/<id>` |
+| `survey` | ✅ surveyId | — | the survey runner | Home | `/open/survey/<id>` |
+| `profile` | ➖ | — | Profile | — | `/open/profile` |
+| `my_account` | ➖ | — | My Account | — | `/open/my_account` |
+| `my_activity` | ➖ | — | My Activity (streak + reading) | — | `/open/my_activity` |
+| `notification_feed` | ➖ | — | the in-app notification feed (bell) | — | `/open/notification_feed` |
+| `faq` | ➖ | — | FAQ | — | `/open/faq` |
+| `terms` | ➖ | — | Terms & Conditions | — | `/open/terms` |
+| `phone_verify` | ➖ | — | phone-number verification (enter number → OTP) | — | `/open/phone_verify` |
+| `help_feedback` | ➖ | — | Help & Feedback | — | `/open/help_feedback` |
+| `feedback_form` | optional | `formType` | the report form, `ISSUE` or `FEATURE` | `ISSUE` | `/open/feedback_form/FEATURE` |
+| `my_reports` | ➖ | — | My Reports (list) | — | `/open/my_reports` |
+| `survey_list` | ➖ | — | Surveys (list) | — | `/open/survey_list` |
+| `weak_topics` | ➖ | — | "Practice your mistakes" topic list | — | `/open/weak_topics` |
+| `replay_session` | optional subject | `subject`, `topic` | mistake replay; no params = **all** outstanding mistakes | replays everything | `/open/replay_session/History` |
+| `practice_list` | ➖ | `filterType` ✅, `filterValue` ✅, `examType` | a filtered PYQ question list | **PYQ tab** | `/open/practice_list?filterType=year&filterValue=2025` |
+| `add_task` | optional taskId | `taskId` | the task editor; no id = blank "add task" form | blank form | `/open/add_task` |
+| `doc_list` | optional subject | `subject` | that subject's document list | Library | `/open/doc_list/History` |
+| `saved_flashcards` | ➖ | — | saved **flashcards list** (≠ `flashcards`, which creates one) | — | `/open/saved_flashcards` |
+| `saved_mnemonics` | ➖ | — | saved **mnemonics list** | — | `/open/saved_mnemonics` |
+| `saved_reels` | ➖ | — | saved reels / Updates list | — | `/open/saved_reels` |
+| `simulation_review` | ✅ **attemptId** | `name` | question-by-question review of that attempt | Library | `/open/simulation_review/<attemptId>` |
+
+**Param values that are validated, not passed through:**
+| param | used by | accepted | anything else |
 |---|---|---|---|
-| `home` (default) | — | Home / dashboard | `/open/home` |
-| `daily_task` | — | Daily tasks (Home) | — |
-| `chat` | — | Chat | `/open/chat` |
-| `chat_expert` | — | Chat, **Expert (SME) mode** preselected | `/open/chat/expert` |
-| `mains` | — | PYQ tab → **Mains** landing | `/open/mains` |
-| `mains_question` | ✅ | that Mains question detail | `/open/mains/<id>` |
-| `reel` | optional | a specific reel (with `id`) or the Reels feed | `/open/reel[/<id>]` |
-| `reelblog` | ✅ | that reel's blog article | `/open/reelblog/<id>` |
-| `pyq` | — | PYQ / Practice tab | `/open/pyq` |
-| `pyq_question` | ✅ | a specific PYQ question | `/open/pyq/<id>` |
-| `simulation` | ✅ | Library → Simulation, highlighted | `/open/simulation/<id>` |
-| `doc` | ✅ | a study document | `/open/doc/<id>` |
-| `library` | — | Library / My Content | `/open/library` |
-| `flashcards` | — | Flashcards | `/open/flashcards` |
-| `mnemonics` | — | Mnemonics | `/open/mnemonics` |
-| `saved` | — | Saved questions | `/open/saved` |
-| `premium` | — | Upgrade / Premium screen | `/open/premium` |
-| `report` | ✅ | that feedback report's detail (My Reports) | `/open/report/<id>` |
-| `survey` | ✅ | the survey runner for that survey | `/open/survey/<id>` |
+| `filterType` | `practice_list` | `year` \| `subject` | → PYQ tab |
+| `filterValue` | `practice_list` | e.g. `2025`, `History` | → PYQ tab |
+| `examType` | `practice_list` | `prelims` \| `mains` | → `prelims` |
+| `formType` | `feedback_form` | `ISSUE` \| `FEATURE` | → `ISSUE` |
+| `subject` / `topic` | `replay_session`, `doc_list` | free text | omitted = broader scope |
+| `name` | `simulation_review` | display name | the app fetches the real name |
+| `taskId` | `add_task` | a task id | omitted = new task |
 
 Anything not in this table falls back to **Home**. `report` and `survey` are sent
 automatically by the feedback module — `report` on a status change or SME reply
 (`id` = reportId), `survey` by `POST /sme/surveys/:id/notify` (`id` = surveyId). A
 survey deep-link to an expired/replaced survey lands on a graceful "no longer
 available" state, never an error screen. `type` is a free string on the send
-API (no backend change to use a new one). ⚠️ The `chat_expert`, `mains`, and the parity
-types (`pyq`/`doc`/`simulation`/`library`/`premium`/…) route only on **app builds ≥ the
-release that shipped them** — older installs fall back to Home for those *push* types
-(universal links degrade more gracefully). Adding a brand-new target that isn't an
-existing app screen still needs an app release.
+API (no backend change to use a new one).
+
+⚠️ **Version floor.** A `type` routes only on **app builds ≥ the release that shipped
+it** — older installs fall back to Home for that *push* type (universal links degrade
+more gracefully). Everything from `profile` downwards in the table, plus `params`
+itself, ships in the **August 2026** release; older installs ignore `params` entirely
+and route on `type`/`id` alone. Adding a brand-new target that isn't an existing app
+screen still needs an app release.
+
+⚠️ **The in-app feed carries `type` + `id` only.** A tap in the bell feed re-routes from
+the stored notification, which does **not** persist `params`. A `params`-dependent
+target (`practice_list`) therefore lands on its fallback (the PYQ tab) when opened from
+the feed rather than from the push itself. Prefer `type`+`id` targets when the feed tap
+matters as much as the push tap.
+
+### 4.3 Deliberately NOT routable
+
+These screens exist but cannot be reached by a link, because they read state that only
+the in-app journey produces — a deep link would land on a blank or "unavailable" screen:
+
+| screen | why not |
+|---|---|
+| Mains **write answer** | reads the question the detail screen loaded; would open a blank editor |
+| Mains **evaluation result** | renders the evaluation from the just-finished session; cold = "No evaluation available" |
+| **Mock test** (+ its result / review) | `count` has no default, and the result screen reads the in-memory attempt |
+| **Simulation test** | starting it creates/resumes a timed attempt — a deliberate product decision that `simulation` highlights the card instead |
+| **Simulation loading** / **result** | transient; the result screen reads the just-submitted attempt (`simulation_review` is the durable equivalent) |
+| **Simulation review detail** | a pager inside the review list; enter via `simulation_review` |
+| **Practice question** pager | reads the list `practice_list` loads; use `practice_list` |
+| **Saved-reels player** | reads the list `saved_reels` loads; use `saved_reels` |
+| **Time allocation edit** | pre-filled with the user's *current* times, which the server does not send; wrong defaults could be saved over the real ones |
+| **Notification settings** | a static "No notifications yet" placeholder — use `notification_feed` |
+| **OTP verification** | needs a live OTP send; use `phone_verify`, which starts that flow |
+| **Delete account** | never an appropriate destination for a push |
 
 ---
 
@@ -219,6 +310,8 @@ Two **separate** mechanisms; do not conflate them:
 - **Persistence:** every send is written to the in-app feed (`notification_history` for
   per-user/segment; `topic_notifications` for broadcast) so users see missed ones.
 - **Amounts/rupees** etc. are irrelevant here (no money in this module).
+- **`params` is additive:** omitting it reproduces the exact payload sent before it
+  existed, and app builds that predate it ignore the key rather than failing.
 - **Auditing:** per-user + segment sends are recorded in `sme_audit_log` (`USER_NOTIFY`).
 
 ---
@@ -230,7 +323,9 @@ Two **separate** mechanisms; do not conflate them:
    `POST /sme/users/:id/notify`.
 3. **Everyone:** `POST /sme/notifications/broadcast`.
 4. **Cohort:** `POST /sme/notifications/segment` with `segment: premium|trial|free`.
-5. Pick a `type` from §4 (default `home`); pass `id` when the type needs it.
+5. Pick a `type` from §4.2 (default `home`); pass `id` when the type needs it, and
+   `params` for the few that take extra arguments (§4.1). Validation is strict —
+   an over-cap or non-string `params` is a **400**, not a silently dropped field.
 6. Read the response counts; treat `successCount:0`/low counts as "few/no active
    devices", not an error.
 7. For `segment`, use a long client timeout (synchronous fan-out).

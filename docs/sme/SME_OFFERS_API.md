@@ -138,6 +138,8 @@ GET /sme/offers?status=LIVE
       "endsAt": "2026-08-15T18:30:00.000Z",
       "isActiveNow": true,
       "heroImageUrl": "https://prepmonkey-704630444646-ap-south-1-an.s3.ap-south-1.amazonaws.com/offers/....png",
+      "bannerImageUrl": null,
+      "requiresCode": false,
       "plans": [ /* … */ ],
       "content": { /* … */ },
       "createdAt": "2026-07-28T09:00:00.000Z",
@@ -151,6 +153,11 @@ GET /sme/offers?status=LIVE
 `isActiveNow` is **derived** (status + window, evaluated now) so the portal never has to
 re-implement the resolver's rule. A campaign can be `LIVE` but not `isActiveNow` — that is a
 scheduled campaign whose window has not opened yet.
+
+`requiresCode` is now returned on every list/detail row (2026-08-21). It was previously accepted
+on create/update but never came back on read — the same bug shape as the FREEDOM15 pricing
+incident (a field that exists on write but not on read) — so a code-gated campaign was
+indistinguishable from a normal one in the portal.
 
 ## 2. Get one campaign
 
@@ -173,6 +180,7 @@ POST /sme/offers
 | `startsAt` | ISO-8601, required | Window opens |
 | `endsAt` | ISO-8601, required | Window closes; must be after `startsAt` |
 | `heroImageUrl` | string \| null | Public URL — see §7 |
+| `bannerImageUrl` | string \| null | Public URL for the Dashboard "Try Premium" banner — a SEPARATE image from `heroImageUrl`. See §7.1 |
 | `plans` | array, required | Pricing tiers, see below |
 | `content` | object, required | Screen copy, see below |
 
@@ -256,8 +264,12 @@ Returns the created campaign (status `DRAFT`).
 PATCH /sme/offers/:id
 ```
 
-Accepts `name`, `startsAt`, `endsAt`, `heroImageUrl`, `plans`, `content`. Tri-state:
-**omitted** = untouched · **null** = cleared · **value** = set.
+Accepts `name`, `startsAt`, `endsAt`, `heroImageUrl`, `bannerImageUrl`, `plans`, `content`.
+Tri-state: **omitted** = untouched · **null** = cleared · **value** = set.
+
+`bannerImageUrl` follows the same tri-state rule as every other scalar field here: a portal form
+that has no banner input simply never sends the key, and the stored value survives untouched. Only
+an explicit `null` clears it.
 
 Sending `code` is rejected with an explicit message rather than a generic validation error.
 Moving the window of a `SCHEDULED`/`LIVE` campaign re-runs the overlap check.
@@ -349,6 +361,44 @@ header on that PUT — the signature *is* the authorisation, and it expires in 5
 a new URL — there is no CDN invalidation to worry about, and no stale image in a user's cache.
 
 **Errors: 400** unsupported `contentType`. **503** object storage not configured on the server.
+
+## 7.1 The Dashboard banner (new, 2026-08-21)
+
+Separate from the paywall screen itself: `GET /api/v1/paywall/banner` (a **user** endpoint, JWT)
+tells the app's Dashboard whether to render a promotional banner, and with what artwork.
+
+```json
+{ "show": true, "imageUrl": "https://.../banners/....png", "code": "INDE50", "campaignId": "6f0a..." }
+```
+
+`show`, `imageUrl`, `code` and `campaignId` are **always present**; `imageUrl`/`code`/`campaignId`
+are `null` when `show` is `false`. Tapping the banner navigates the client to
+`/paywall?code=<CODE>` — the exact path a share link already opens.
+
+**To give a campaign a banner:** upload artwork via `POST /sme/media/upload-url` with
+`folder: "banners"` (§7), then set `bannerImageUrl` on the campaign (§3/§4). A campaign with no
+`bannerImageUrl` never shows a Dashboard banner, even while it is `LIVE` and resolving normally
+through `/paywall`.
+
+**Resolution rule — deliberately simpler than the paywall resolver:**
+1. A user with a real paid entitlement never sees a banner (same `hasPaidEntitlement` check as
+   the paywall — a trial user, including a lapsed one, still sees it; only a genuinely paying user
+   does not).
+2. Otherwise: the `LIVE` campaign whose window contains now, with a non-null `bannerImageUrl`,
+   most-recently-started first. No code is involved — this endpoint is never called with one.
+
+**🔑 `requiresCode` is deliberately ignored here.** A code-gated campaign (§0, §3) still gets a
+Dashboard banner if you set `bannerImageUrl` on it — this is an explicit product decision, not an
+oversight. The banner IS the distribution channel for that campaign: tapping it sends the user to
+`/paywall?code=<CODE>`, the same code-supplied path a WhatsApp share link already uses, so nothing
+about `requiresCode`'s safety property (invisible to the no-code auto-apply crowd) is weakened —
+the banner is just another way to *hand someone the code*. It is also safe against old app builds:
+a client that predates this endpoint never calls it, so it cannot be affected either way. There is
+no iOS-offer-code gate on this endpoint (unlike `/paywall`) — the banner is a static image, not a
+price; the actual price check still happens when the tap lands on `/paywall`.
+
+**No caching** — same reasoning as `/paywall` itself: the response depends on the calling user's
+premium status, so anything keyed on method+url would leak one user's banner to another.
 
 ## 8. Previewing before launch
 
