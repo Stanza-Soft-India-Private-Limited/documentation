@@ -211,6 +211,30 @@ POST /sme/offers
 > app enforces** — keep them in sync with the real quota caps, or you will publish limits the
 > backend does not honour.
 
+**`content.styles`** (optional, added 2026-08-22) — per-field colour/bold override. Object keyed by
+field name, value `{ "color"?: "#RRGGBB", "bold"?: boolean }`:
+
+| Key | Type | Notes |
+|---|---|---|
+| `styles` | object, optional | Keys must be one of: `badgeText`, `titleLine1`, `titleLine2`, `urgencyTitle`, `countdownLabel`, `benefitsTitle`, `comparisonTitle`, `socialProof`, `ctaLabel`. **Not stylable**: `highlightWord` (it already has `highlightStyle`) and the array fields `benefits[]`/`comparison[]` (no per-row styling) |
+| `styles.<field>.color` | string, optional | Must match `^#[0-9A-Fa-f]{6}$` (6-digit hex, `#` + RGB, no short form, no named colours) |
+| `styles.<field>.bold` | boolean, optional | |
+
+**`content.socialProofAvatars`** (optional, added 2026-08-22) — array of avatar image URLs shown
+next to `socialProof`, at most 5. ⚠️ These are **curated images uploaded via §7's media endpoint,
+NOT real user photos** — that is a deliberate privacy decision, not a placeholder. Each entry must
+be an `https://` URL, ≤500 characters.
+
+> ⚠️ **Both keys silently degrade rather than error.** An unknown `styles` key, a malformed
+> `color`, a non-boolean `bold`, a non-`https` or over-long avatar URL, or more than 5 avatars —
+> the offending piece is dropped and the save still succeeds (400 is never returned for this). A
+> field with neither a valid `color` nor a valid `bold` is dropped entirely; an empty
+> `socialProofAvatars` array is dropped entirely. The clients fall back to their own theme colour /
+> no avatar row, so a bad value just looks like today's screen, never a broken one. Same
+> merge-by-id-on-PATCH protection as every other `content` key applies — omitting `styles` or
+> `socialProofAvatars` on an update leaves the stored value untouched; sending one replaces it
+> wholesale.
+
 ```json
 // POST /sme/offers
 {
@@ -242,7 +266,16 @@ POST /sme/offers
     "comparisonTitle": "Features",
     "comparison": [{ "feature": "Mnemonics", "free": "3/Day", "premium": "Unlimited" }],
     "socialProof": "Join 5000+ serious aspirants already preparing smarter with PrepMonkey",
-    "ctaLabel": "JOIN PREPMONKEY"
+    "ctaLabel": "JOIN PREPMONKEY",
+    "styles": {
+      "titleLine1": { "color": "#FFB4A2", "bold": true },
+      "badgeText": { "color": "#FFFFFF" }
+    },
+    "socialProofAvatars": [
+      "https://cdn.prepmonkey.com/avatars/a.png",
+      "https://cdn.prepmonkey.com/avatars/b.png",
+      "https://cdn.prepmonkey.com/avatars/c.png"
+    ]
   }
 }
 ```
