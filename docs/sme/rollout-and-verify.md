@@ -62,3 +62,58 @@ scans without errors. See `project_wylto_contact_sync`.
 - Webhook reconcile (#3): a `payment.captured` for a PAID-but-not-granted order
   grants premium once; redelivery is a no-op (`order.premium_granted_at` guard).
 - Each destructive/privileged call writes an `sme_audit_log` row.
+
+---
+
+## 6. Notification engine (added 2026-08-26)
+
+**Ordering is load-bearing — two of these fail SILENTLY if skipped.**
+
+1. **Apply both migrations by hand, before the deploy.**
+   `20260826000000_streak_and_pyq_postgres_mirrors`, then
+   `20260826010000_notification_engine`. Both additive and idempotent.
+
+2. **Verify against `information_schema`, not `_prisma_migrations`** (migrations are applied by
+   hand here, so the migrations table is not trustworthy):
+
+```sql
+SELECT
+  (SELECT count(*) FROM information_schema.tables  WHERE table_name='daily_sessions')                                   AS daily_sessions,
+  (SELECT count(*) FROM information_schema.tables  WHERE table_name='pyq_attempts')                                     AS pyq_attempts,
+  (SELECT count(*) FROM information_schema.tables  WHERE table_name='notification_rule')                                AS notification_rule,
+  (SELECT count(*) FROM information_schema.columns WHERE table_name='user_auth' AND column_name='current_streak')       AS current_streak,
+  (SELECT count(*) FROM information_schema.columns WHERE table_name='app_config' AND column_name='notification_config') AS notification_config;
+-- Expect 1 on every column.
+```
+
+3. **Seed the rules** — `scripts/seed-notification-rules.ts --execute` (dry run first).
+   Creates 13 rules; only `payment_success` and `trial_ending` enabled, because those two
+   already fire in production. **Skipping this stops payment confirmations**, with nothing in
+   the logs except the boot alarm in step 6.
+
+4. **Backfill streak + PYQ attempts BEFORE the deploy** —
+   `scripts/backfill-streak-and-pyq-from-neo4j.ts --prod` (dry run), then `--prod --execute`.
+   At deploy the streak endpoints flip their reads to Postgres; if the tables are empty every
+   user with session history sees an empty progress calendar.
+   ⚠️ Use `--prod`, do NOT pass `DATABASE_URL=` on the command line — extracting it in the
+   shell mangles the password and Prisma fails with a misleading "invalid port number". That
+   is why the first prod run of this script wrote zero rows.
+
+5. **Deploy**, then re-run the backfill once to pick up the gap.
+
+6. **Read the boot log.** If you see `[NOTIFICATION GAP]`, step 3 did not happen and users are
+   paying without being told.
+
+7. **Smoke:**
+
+```bash
+# 401 (route exists, wants a key) — NOT 404
+curl -s -o /dev/null -w '%{http_code}\n' https://app.stanzasoft.ai/api/v1/sme/notification-rules/triggers
+# 13 triggers, exactly 2 rules live
+curl -s -H "x-api-key: $KEY" https://app.stanzasoft.ai/api/v1/sme/notification-rules \
+  | jq -r '.data[] | select(.isLiveNow) | .triggerKey'
+```
+
+8. **Confirm the scheduler is ticking** — after the first rule's send time passes, a row should
+   exist in `notification_rule_run`. Disabled rules appear there in `SHADOW` mode with
+   `sent = 0`; that is success, not failure.

@@ -247,11 +247,36 @@ itself, ships in the **August 2026** release; older installs ignore `params` ent
 and route on `type`/`id` alone. Adding a brand-new target that isn't an existing app
 screen still needs an app release.
 
-⚠️ **The in-app feed carries `type` + `id` only.** A tap in the bell feed re-routes from
-the stored notification, which does **not** persist `params`. A `params`-dependent
-target (`practice_list`) therefore lands on its fallback (the PYQ tab) when opened from
-the feed rather than from the push itself. Prefer `type`+`id` targets when the feed tap
-matters as much as the push tap.
+✅ **The in-app feed carries `params` too** (corrected 2026-08-26 — this section previously
+said it did not). `notification_history.params` / `topic_notifications.params` have existed
+since migration `20260821020000_notification_params`, the feed response returns them, and
+`NotificationFeedScreen` re-encodes them through the same `DeepLinkMapper.fromData` the push
+tap uses. A `params`-dependent target such as `practice_list` routes identically from the bell
+feed and from the system shade.
+
+⚠️ Still true: an install older than the August 2026 release ignores `params` entirely and
+routes on `type`/`id` alone, from either surface.
+
+### 4.2b Per-user opt-outs now exist — and they apply to YOUR sends too
+
+Users have four category toggles (Payment · Streak · Progress · Content) plus a "pause
+everything for N days" switch, exposed to the app as:
+
+```
+GET   /notifications/preferences        (JWT)
+PATCH /notifications/preferences        (JWT)
+POST  /notifications/tapped             (JWT) — reports a real notification open
+```
+
+⚠️ **A user who has never opened that screen has every category ON.** Absence of a stored
+preference is not an opt-out — on the day this shipped, that was the entire installed base.
+
+The three ad-hoc SME send routes in this document (`/sme/users/:id/notify`,
+`/sme/notifications/broadcast`, `/sme/notifications/segment`) are **direct sends and do not
+consult preferences, quiet hours or the daily cap.** They are the manual override and behave
+exactly as they did before. Anything that should respect a user's choice belongs in a
+notification rule instead — see
+[SME_NOTIFICATION_RULES_API.md](./SME_NOTIFICATION_RULES_API.md).
 
 ### 4.3 Deliberately NOT routable
 

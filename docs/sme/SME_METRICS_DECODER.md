@@ -213,6 +213,24 @@ Answers "should we force-update?". `GET /sme/analytics/release-health`. Default 
 | **Worst performers** | Types with ≥50 matured sends **and** ≤25% read rate. | Tune both thresholds in the toolbar. Empty ≠ healthy — check "Matured sent" first. |
 | **Time to read** | Always **"not derivable"**. | `read_at` exists but records the *bulk feed open*, not this notification's open. Any number here would be fabricated, so we return none. |
 
+### 5.1 There is now an honest alternative — but only for engine-sent notifications
+
+`GET /sme/notification-rules/:id/analytics` returns `sent` / `tapped` / `tapRate` from
+`notification_dispatch`. **`tapped` is set only when the user actually opened that
+notification** — the thing `isRead` was never able to tell you.
+
+Three caveats, all load-bearing:
+
+- It covers **only notifications sent by a rule**. Ad-hoc sends (`/sme/notifications/broadcast`,
+  `/segment`, `/sme/users/:id/notify`) write no dispatch row and are still `isRead`-only.
+- **`tapped` is 0 for every rule until the mobile release that reports taps ships.** Until
+  then a 0% tap rate means "not measured", not "nobody tapped". Do not kill a rule on it.
+- **Delivery is still not tracked.** A tap proves delivery; the absence of one does not prove
+  non-delivery. `tapRate` remains a floor, not a rate.
+
+Never place `tapped` and `isRead` side by side without labels — `isRead` is much larger by
+construction, and the comparison invites exactly the wrong conclusion.
+
 **How to read a low rate honestly:** a type sent mostly to already-engaged users scores well regardless of its content. A **very low** rate is the trustworthy direction of this signal; a high rate is weak evidence.
 
 ---

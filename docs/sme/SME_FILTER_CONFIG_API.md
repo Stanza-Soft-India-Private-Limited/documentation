@@ -10,6 +10,22 @@ team builds the UI.
 **Authentication:** `x-api-key: <API_KEY_SECRET>` header on **every** request.
 **Swagger:** `/api/docs` (group **SME**) documents these live with the `x-api-key` control.
 
+> ### 🆕 2026-08-25 — subjects are now PER EXAM
+>
+> Every route in this doc accepts an optional **`?exam=<slug>`** query parameter.
+>
+> **Omitting it means `upsc-cse`, so every call the portal makes today is unchanged** — this is
+> purely additive. Pass `?exam=appsc-group-1` to edit that exam's subject config instead.
+>
+> Two differences from the app-facing routes:
+> - An **unknown exam returns `400`**, not a silent fallback to UPSC. An admin edit must never
+>   quietly redirect itself onto live UPSC config.
+> - `POST /sme/filter-config/mains/:subject/optional` flips the rows **visible in that exam**, which
+>   includes rows tagged `"*"` (shared with every exam). Flipping a subject containing shared rows
+>   affects every exam those rows appear in.
+>
+> Responses now also carry an `exam` field. Full context: **[SME_EXAMS_API.md](./SME_EXAMS_API.md)**.
+
 ---
 
 ## 0. The mental model (read this first)
