@@ -63,6 +63,10 @@ in `vars` on the trigger. Show them as insertable chips next to the title/body i
 produces *"Your Premium ends in  days"* — silently, with no error anywhere. The chips are the
 defence; a free-text box with no affordance will produce typos.
 
+The `/triggers` response now also carries `sampleVars` — the values a test send renders with.
+Use them to power a live preview of the copy as the operator types; it is the same data the
+backend will use, so the preview cannot drift from the test.
+
 Enforce title ≤ 120 and body ≤ 500 with live counters. The API truncates rather than rejecting,
 so an over-long body is lost quietly at send time.
 
@@ -86,6 +90,24 @@ suffers from "four denominators with no bridge" and this is the same trap:
 matched 3,412  →  after prefs 3,255  →  after caps 2,891
                   suppressed: 157 opted out · 364 daily cap · 30 already sent
 ```
+
+⚠️ **The counts are `null` when they would be meaningless** — on a failed run, and on every
+EVENT-kind rule (`triggerKind: "EVENT"`). Render `null` as "not applicable", never as `0`, and
+**do not compute a reach estimate from it**. Showing *"100% of 0 ≈ 0 people"* beside a live
+Enable button is the exact failure this prevents — it happened on the first build of this page,
+downstream of a preview that had already reported an error.
+
+For an EVENT rule, replace **the funnel** with the `skippedReason` text — there is no standing
+audience to size.
+
+🔴 **KEEP THE REACH STEPPER.** `rolloutPercent` is enforced per-user inside the event path, so
+an EVENT rule enabled at **0% sends to nobody, ever** — it just never fires, with no error and
+no run row to notice. What is impossible for an EVENT rule is the *estimate* ("≈ N people"),
+because there is no cohort to count; the percentage itself is as real and as necessary as it is
+for a scheduled rule. Show the stepper with no people-count beside it.
+
+(An earlier revision of this doc said to hide the stepper. That was wrong and would have made
+every enabled event rule silently dead.)
 
 ⚠️ **`matchedUsers` ignores rollout; the `after*` counts honour it.** At 0% rollout the
 `after*` numbers are legitimately 0. Label `matchedUsers` as *the audience* and the rest as

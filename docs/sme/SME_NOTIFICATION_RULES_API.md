@@ -130,6 +130,11 @@ edit, not a migration.
 { "copy": { "title": "Don't break your {{streak}}-day streak", "body": "..." } }
 ```
 
+`{{placeholders}}` are filled from the trigger's `vars`. **A test send renders with the
+trigger's `sampleVars`** (representative values), not with a real user's data — so the copy you
+see in a test is the shape of the sentence, not that person's numbers. A real send uses their
+actual values.
+
 `{{placeholders}}` are filled from the trigger's `vars`. **An unknown or missing variable
 renders as an empty string, never as the literal `{{name}}`** — a user must never see template
 syntax in their notification shade. Whitespace is collapsed afterwards, so
@@ -250,9 +255,15 @@ POST /sme/notification-rules/:id/preview
 Resolves the **real** audience and applies the **real** suppression chain. Sends nothing,
 writes nothing.
 
+⚠️ **Every count is `null`, not `0`, whenever a number would be a lie** — when the run
+errored, and for every EVENT-kind rule. `0` means "nobody qualified"; `null` means "there is no
+meaningful number here". Do not render `null` as `0`, and never compute a reach estimate
+("100% of N people") from it.
+
 ```jsonc
 {
-  "matchedUsers": 3412,     // the trigger's predicate
+  "triggerKind": "SWEPT",   // EVENT rules have no standing audience
+  "matchedUsers": 3412,     // null if errored, or if triggerKind is EVENT
   "afterPrefs":   3255,     // minus opt-outs and snoozes
   "afterCaps":    2891,     // minus the per-user daily cap
   "suppressed": { "rollout": 0, "optedOut": 157, "cooldown": 30,
@@ -266,6 +277,10 @@ writes nothing.
 
 **Read `matchedUsers` before enabling anything.** A number far larger than you expected means
 the predicate is wrong, and you have learned that with nobody notified.
+
+**Previewing an EVENT rule** returns `triggerKind: "EVENT"`, every count `null`, and a
+`skippedReason` explaining that it fires on a domain event and has no audience to resolve.
+That is the correct answer, not a failure — check its copy with a test send instead.
 
 ⚠️ Preview honours `rolloutPercent`. At 0% the `after*` counts are 0 — that is correct, it is
 what would actually happen. `matchedUsers` is the number to size the audience by.
