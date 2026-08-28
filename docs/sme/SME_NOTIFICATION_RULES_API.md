@@ -130,10 +130,16 @@ edit, not a migration.
 { "copy": { "title": "Don't break your {{streak}}-day streak", "body": "..." } }
 ```
 
-`{{placeholders}}` are filled from the trigger's `vars`. **A test send renders with the
-trigger's `sampleVars`** (representative values), not with a real user's data — so the copy you
-see in a test is the shape of the sentence, not that person's numbers. A real send uses their
-actual values.
+**A test send now renders with the named user's REAL data** — their name, streak, last-7-day
+practice count and accuracy, days since their last attempt, their in-progress document, days to
+their exam. Anything genuinely not computable for that person (a plan name for someone who has
+never paid, a document for someone with none in progress) falls back to a representative sample,
+and the response lists exactly which variables were sampled in `sampledVars`. So a test answers
+the question it exists for: does this person's notification look right?
+
+⚠️ **A test still bypasses the audience predicate**, so you can test a rule against someone who
+would not actually qualify for it — e.g. `weekly_progress` renders "0 active days" for a user
+the real sweep would skip.
 
 `{{placeholders}}` are filled from the trigger's `vars`. **An unknown or missing variable
 renders as an empty string, never as the literal `{{name}}`** — a user must never see template
