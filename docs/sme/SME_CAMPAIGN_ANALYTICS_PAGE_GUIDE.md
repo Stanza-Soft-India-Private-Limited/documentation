@@ -1,5 +1,9 @@
 # SME Campaign Analytics — Page Redesign Brief
 
+> Changed 2026-09-21 — stale-text pass (telemetry live in 2.0, version ladder, links). Exam-dimension changes follow in [WHAT_CHANGED_2026-09-21.md](./WHAT_CHANGED_2026-09-21.md).
+> Changed 2026-09-21 — exam dimension on users, orders, offers, banners; two BREAKING calls (see [WHAT_CHANGED_2026-09-21.md](./WHAT_CHANGED_2026-09-21.md)).
+> Changed 2026-09-21 — per-exam broadcast, validated segment exam (+ fix), survey targetExams, feedback ?exam= (see [WHAT_CHANGED_2026-09-21.md](./WHAT_CHANGED_2026-09-21.md)).
+
 > ## ⛔ BEFORE YOU WRITE ANY UI CODE — INVOKE THE `frontend-design` SKILL
 > If you are a Claude/coding session rebuilding this page, your **first action** is to invoke the
 > **`frontend-design`** skill (`/frontend-design`). Do this **even if no one asked you to**. Every
@@ -32,7 +36,8 @@ Observed on the live FREEDOM15 screen, with the real numbers:
    promoted until **14 Aug**. The page reported from the 10th, so four days of internal setup traffic
    appeared as demand. *(New `from`/`to` params fix this — see §3.)*
 4. **The list is mostly staff.** Of the 7 "certain abandoners", effectively all were team accounts
-   (`@stanzasoft.com`, plus team members on personal Gmail). A "recovery list · 7 to chase" that
+   (the internal staff email domain, plus team members on personal Gmail). A "recovery list ·
+   7 to chase" that
    contains no customers is worse than an empty one.
 5. **There was no "just visited" number at all** — the stage most people assume they are looking at.
    *(New `VIEW` signal — see §2.)*
@@ -82,6 +87,18 @@ Then at most **three** supporting stats: `revenue` · `buyers` · `discount give
 equal-weight cards force the reader to work out which one matters. Do not put "certain abandoners"
 and "inferred interest" in the same row as revenue — they are diagnosis, not outcome.
 
+**Put the campaign's exam in this band.** A campaign discounts exactly one exam, and since
+2026-09-21 **two campaigns can be `LIVE` simultaneously in different exams** — so a verdict
+sentence with no exam in it is ambiguous the moment a second exam runs anything. Render it as
+a chip next to the campaign name: *FREEDOM15 · **upsc-cse** · LIVE*.
+
+✅ **`campaign.examId` is in the `/abandoned` and `/purchased` responses** (added 2026-09-21;
+it was absent at `4f6622e`, and this guide previously told you to fetch it separately). Read the
+chip straight off the response you already have — **drop the extra `GET /sme/offers/:id` call**
+if it exists only for this. Do not derive the exam from any user's `activeExamId`: someone
+studying UPSC can abandon an APPSC campaign, and both lists are scoped by the campaign, not by
+the user.
+
 ### Band 2 — the funnel (this replaces the confusing prose block)
 One horizontal funnel, four stages, each showing **distinct users** and the drop to the next:
 
@@ -126,8 +143,9 @@ warning chip, never a silent fallback to the order amount.
 
 ## Cross-cutting rules
 
-1. **Add an "exclude internal accounts" toggle, default ON.** Filter `@stanzasoft.com` and
-   `@designasylum.in` on the **domain part only** — the same rule already used for marketing exports.
+1. **Add an "exclude internal accounts" toggle, default ON.** Filter the two internal staff email
+   domains (ask the backend team for the current list — they are configuration, not constants) on
+   the **domain part only**, the same rule already used for marketing exports.
    Show the count that was hidden ("4 internal accounts hidden") so nothing disappears silently.
    Without this the recovery list is unusable.
 2. **State the window you are describing**, from `window.from`/`window.to` — not the campaign dates.
@@ -151,20 +169,40 @@ campaign price (₹4,999 for FREEDOM15, verified against Razorpay's own checkout
 that banner will distrust a correct price, or worse, assume a discount is cosmetic and approve one
 that is real. Delete it.
 
+Two more list-page changes, from 2026-09-21:
+
+- **Add an Exam column.** Every row of `GET /sme/offers` now returns `examId`, and the list is
+  cross-exam by default.
+- **`?exam=<slug>` is wired and validated** — build the filter control. An unknown slug is a 400,
+  not an empty page.
+- **Stop flagging two LIVE campaigns as a conflict.** The one-live-campaign rule is enforced
+  *per exam*; UPSC and APPSC each running one concurrently is the intended state.
+
 ---
 
-## What will be empty on day one — plan for it
+## What may be empty — plan for it
 
-- **`viewed` is 0 for any window before 2026-08-20.** Do not render a funnel that implies nobody
-  looked; render the "since 20 Aug" badge, or hide the stage entirely for older windows.
-- **`/purchased` is empty for FREEDOM15.** That is the true state, not a failure. The empty state
-  should say so plainly and point at the funnel for where people dropped.
+- **`viewed` is 0 for any window before 2026-08-20.** This is a *capture start date*, not an app
+  release: `VIEW` is stamped server-side by the paywall resolver, so it does not depend on which
+  build the user is running. Do not render a funnel that implies nobody looked; render the
+  "since 20 Aug" badge, or hide the stage entirely for older windows.
+- **`/purchased` is empty for FREEDOM15.** True as of this doc's writing, not a failure. The
+  empty state should say so plainly and point at the funnel for where people dropped — but
+  re-check the campaign before repeating the claim on screen.
 - **`platform` may be `null`** for web traffic before 2026-08-16. Render "Unknown", never "Web".
+- **`TAP` (the iOS signal) is client-emitted** and is floored by `minAppVersion` (default `1.8`)
+  on `/abandoned` — see [`SME_CAMPAIGN_ABANDONED_API.md`](./SME_CAMPAIGN_ABANDONED_API.md). It
+  is live and has been since 1.8; current store build is **2.0** (released 2026-09-17). A thin
+  `TAP` count is coverage of the updated install base, never proof of no intent.
 
 ---
 
 ## Definition of done
 
+- [ ] The campaign's exam is shown in the verdict band, read from `campaign.examId` on the
+      `/abandoned` or `/purchased` response itself (no extra `GET /sme/offers/:id` for it)
+- [ ] The `/offers` list has an Exam column and an `?exam=` filter, and does not warn when two
+      campaigns are LIVE in different exams
 - [ ] One merged table with a `signal` filter; `TAP` off by default
 - [ ] Funnel band driven by `funnel.*`, units labelled **users**, deploy-forward badge on `viewed`
 - [ ] Verdict sentence above the stats

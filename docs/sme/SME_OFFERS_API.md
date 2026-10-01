@@ -1,5 +1,8 @@
 # SME — Promotional Offers API Guide
 
+> Changed 2026-09-21 — exam dimension on users, orders, offers, banners; two BREAKING calls (see [WHAT_CHANGED_2026-09-21.md](./WHAT_CHANGED_2026-09-21.md)).
+> Changed 2026-09-21 — per-exam broadcast, validated segment exam (+ fix), survey targetExams, feedback ?exam= (see [WHAT_CHANGED_2026-09-21.md](./WHAT_CHANGED_2026-09-21.md)).
+
 Create, schedule and kill promotional pricing campaigns without an app release. When a campaign is
 live, users who tap *Try Premium* (or open a share link) see the campaign paywall; when it is not,
 they see the normal pricing screen. We expose the endpoints — the SME team builds the UI.
@@ -42,11 +45,19 @@ obvious in the portal — an accidental "End now" cannot be undone.
 A `PAUSED` campaign **releases its date window**, so a replacement can go live in the same period.
 That means resuming re-runs the overlap check and can be refused if something else took the slot.
 
-**Only one campaign may occupy any instant.** The overlap rule applies to `SCHEDULED` and `LIVE`
-campaigns only, so you can freely author several competing **drafts** for the same period and
-activate whichever you pick. The check runs transactionally (under a Postgres advisory lock) on
-activate, and again if you move a live campaign's window — so two portal users cannot race two
-overlapping campaigns live.
+**Only one campaign may occupy any instant — PER EXAM.** The overlap rule applies to `SCHEDULED`
+and `LIVE` campaigns only, so you can freely author several competing **drafts** for the same
+period and activate whichever you pick. The check runs transactionally (under a Postgres advisory
+lock, keyed on the exam) on activate, and again if you move a live campaign's window — so two
+portal users cannot race two overlapping campaigns live.
+
+**A campaign belongs to exactly one exam** (`examId` — **required on create since
+2026-09-21, no default**, see §3), so UPSC and APPSC can
+each run their own campaign at the same time. It is one exam rather than many because a plan
+carries an **absolute** `priceInPaise`, not a percentage: the same campaign applied to an exam
+with a lower list price would be a price *increase*, and the discount-floor check would reject it
+at checkout — after the user had already tapped buy. Moving a campaign to another exam re-runs
+both the overlap check and the discount floor against the target exam's prices.
 
 **The code is public and permanent.** `code` is the token in the share link
 (`https://app.prepmonkey.com/open/offer/INDE50`). It is normalised to uppercase, matched
@@ -121,11 +132,33 @@ correctly on our UTC servers. An offset-less string is interpreted as UTC and wi
 ## 1. List campaigns
 
 ```
-GET /sme/offers?status=LIVE
+GET /sme/offers?status=LIVE&exam=appsc-group-1
 ```
 
-`status` is optional and must be one of `DRAFT | SCHEDULED | LIVE | ENDED | ARCHIVED`.
+| Query | Description |
+|---|---|
+| `status` | Optional. One of `DRAFT \| SCHEDULED \| LIVE \| PAUSED \| ENDED \| ARCHIVED`. |
+| **`exam`** | Optional slug. **Omitted returns every exam's campaigns** — the list screen is cross-exam by design now that several can be LIVE at once, and every row carries its own `examId`. **400 on an unknown slug**, never an empty page that reads as "this exam has no campaigns" while a live one sits under the correct spelling. |
 
+Ordered by `startsAt` descending. The response is `{ data[], total }` — **not** paginated,
+and `total` is the length of `data`, not a cross-page count.
+
+**What staging returns today**
+<!-- captured from staging 2026-09-21, backend f6329e6 -->
+`GET /sme/offers` → **200**, verbatim:
+
+```json
+{ "data": [], "total": 0 }
+```
+
+> 🔎 **Staging has no campaigns** (creating one is a live promotional object, so none was
+> created for this capture). The envelope above is the live one and it is the part that
+> surprises people: **there is no `page` / `limit` / `hasMore`** — unlike every list in
+> [`SME_PORTAL_API.md`](./SME_PORTAL_API.md), this endpoint is unpaginated and `total` is
+> just `data.length`. The row shape below is verified against the DTO.
+
+**Row shape** (from code):
+<!-- shape verified against code @4f6622e — staging holds no campaigns, see note above -->
 ```json
 {
   "data": [
@@ -134,6 +167,7 @@ GET /sme/offers?status=LIVE
       "code": "INDE50",
       "name": "Independence 2026",
       "status": "LIVE",
+      "examId": "upsc-cse",
       "startsAt": "2026-08-01T00:00:00.000Z",
       "endsAt": "2026-08-15T18:30:00.000Z",
       "isActiveNow": true,
@@ -159,13 +193,28 @@ on create/update but never came back on read — the same bug shape as the FREED
 incident (a field that exists on write but not on read) — so a code-gated campaign was
 indistinguishable from a normal one in the portal.
 
+`examId` is likewise read back on every row (2026-09-21). Without it the list is a set of rows
+that look like they violate the one-live-campaign rule for no visible reason — **several
+campaigns can now be `LIVE` at the same time, one per exam.** Show the exam as a column, and
+never treat "two LIVE campaigns" as a data error without comparing their `examId`.
+
 ## 2. Get one campaign
 
 ```
 GET /sme/offers/:id
 ```
 
-Same object as a list row. **Errors: 404** when the id is unknown.
+Same object as a list row, `examId` included. **Errors: 404** when the id is unknown.
+
+**Per-campaign conversion lists** hang off the same id and are documented separately:
+
+| Call | What it answers | Guide |
+|---|---|---|
+| `GET /sme/offers/:id/abandoned` | Reached for this campaign and never paid | [SME_CAMPAIGN_ABANDONED_API.md](./SME_CAMPAIGN_ABANDONED_API.md) §1–§7 |
+| `GET /sme/offers/:id/purchased` | Completed a purchase on this campaign, end to end | [SME_CAMPAIGN_ABANDONED_API.md](./SME_CAMPAIGN_ABANDONED_API.md) §7b |
+
+Both are scoped by the campaign row itself, so every user they return belongs to **the
+campaign's own exam** — there is no `?exam=` on either, and adding one would be meaningless.
 
 ## 3. Create a campaign
 
@@ -173,14 +222,44 @@ Same object as a list row. **Errors: 404** when the id is unknown.
 POST /sme/offers
 ```
 
+> ## 🔴 BREAKING (2026-09-21) — `examId` is now REQUIRED
+>
+> It used to default to `upsc-cse`. Omitting it — or sending `""` / whitespace — is now a
+> **400**. Captured from staging on 2026-09-21 (backend `f6329e6`) by POSTing an
+> otherwise-valid campaign body with `examId` removed — **no campaign was created**:
+>
+> ```json
+> {
+>   "success": false,
+>   "message": "examId is required (e.g. upsc-cse). Campaigns are per exam.",
+>   "error": "Bad Request",
+>   "statusCode": 400,
+>   "timestamp": "2026-09-21T14:45:30.551Z",
+>   "path": "/api/v1/sme/offers",
+>   "method": "POST"
+> }
+> ```
+>
+> **Why there is no default.** A tier carries an **absolute** `priceInPaise`, so the
+> default silently filed APPSC campaigns against **UPSC's** list prices: priced against
+> the wrong list, locked against UPSC's one-live-campaign window, and **invisible to
+> every APPSC paywall while the portal reported them live.** A campaign is a per-exam
+> object; authoring one without saying which exam cannot be done correctly by guessing.
+>
+> **Portal action:** make `examId` the **first** field on the create form, a select
+> populated from `GET /sme/exams`. Do not prefill it with `upsc-cse` — an unchosen default
+> is the failure this change removes. `PATCH` is unaffected (tri-state, §4).
+
 | Body field | Type | Description |
 |---|---|---|
 | `code` | string, required | 3–32 chars, `[A-Za-z0-9_-]`. Uppercased on save. **Immutable afterwards.** |
 | `name` | string, required | Internal label, never shown to users |
+| **`examId`** | slug, **required** | Which exam this campaign discounts. Decides **which exam's `exam_plans` prices the discount floor is checked against**, and **which exam the one-live-campaign rule is enforced within**. Validated — an unknown slug is a 400 (`offer_campaign.exam_id` has no FK, so a typo would be accepted by the database and then resolve for nobody). |
 | `startsAt` | ISO-8601, required | Window opens |
 | `endsAt` | ISO-8601, required | Window closes; must be after `startsAt` |
 | `heroImageUrl` | string \| null | Public URL — see §7 |
 | `bannerImageUrl` | string \| null | Public URL for the Dashboard "Try Premium" banner — a SEPARATE image from `heroImageUrl`. See §7.1 |
+| `requiresCode` | boolean, optional | Default `false`. When `true` the campaign is reachable **only** via its exact code and never auto-applies — use it for TEST campaigns (a 99%-off price that must not reach real users) and for link-distributed promos. Returned on every read since 2026-08-21. |
 | `plans` | array, required | Pricing tiers, see below |
 | `content` | object, required | Screen copy, see below |
 
@@ -199,7 +278,7 @@ POST /sme/offers
 | `priceInPaise` | int ≥ 0, optional | **The real charge, in paise** — `499000` = ₹4,990. The only field that changes what a customer pays. Applies to the **first period only**. On iOS renewals go back to standard automatically; on Android/web a campaign purchase is one-time and does not renew at all. Must be **below** the standard price for that plan or the discount is refused and standard is charged. Omit it → presentation-only campaign. **Yearly tier only.** Set it to the same amount as the ASC offer code (§9) |
 | `appleOfferCode` | string, optional | The App Store Connect **Offer Code** this campaign redeems on iOS. Uppercase `A–Z0–9`, max 64 chars, e.g. `FREEDOM79`. **Omit it and iPhone users get the standard paywall for this campaign** — they never see the discounted screen |
 | `appleProductId` | string, optional | The ASC product the offer code belongs to, e.g. `com.prepmonkey.premium.yearly`. Required alongside `appleOfferCode` — an offer code is only meaningful against its product |
-| `bonusDays` | int 0–3650 | Extra entitlement days added on top of the plan duration. **Honoured on Razorpay today** (granted once, on the first paid cycle only — renewals do not repeat it). **Currently unused**: the pay-up-front discount shape cannot carry free months on Apple, so campaigns discount the price instead. Leave it at `0` and keep the copy free of "+2 months" claims. It stays documented for a future free-trial-style campaign |
+| `bonusDays` | **must be `0`** (or omitted) | **Reserved field, not honoured by any checkout path** — extra entitlement days on top of the plan duration, which nothing delivers today. A value `> 0` is a **400**: `plans[i].bonusDays must be 0 — bonus days are not honoured by any checkout path yet, so a non-zero value would advertise free time the customer never receives.` A value outside `0–3650`, or a non-integer, is a different 400. Campaign purchases are one-time Razorpay orders and Apple offer-code subscriptions; neither adds entitlement days, and Apple cannot combine a discount with free months at all. Refusing is deliberate: the alternative is a campaign that advertises "+60 days" and silently delivers none. The field stays in the schema for a future free-trial-shaped campaign — **keep the copy free of "+2 months" claims** |
 | `isDefault` | boolean | The plan selected when the screen opens. **At most one** plan may set it |
 
 **`content`** — every field optional; anything omitted falls back to the standard paywall's copy:
@@ -235,11 +314,19 @@ be an `https://` URL, ≤500 characters.
 > `socialProofAvatars` on an update leaves the stored value untouched; sending one replaces it
 > wholesale.
 
+**Full create body** — this is a **request**, not a response, so there is nothing to
+capture back from it; a successful create makes a live promotional object and was
+deliberately not run on staging. What *was* exercised on staging 2026-09-21 (backend
+`f6329e6`) is this exact body with `examId` deleted, which returned the 400 quoted in the
+breaking-change box above — so the required-field set below is current against the
+deployed validator.
+<!-- shape verified against code @4f6622e — request body; the examId rejection was captured, the create was not run -->
 ```json
 // POST /sme/offers
 {
   "code": "INDE50",
   "name": "Independence 2026",
+  "examId": "upsc-cse",
   "startsAt": "2026-08-01T00:00:00+05:30",
   "endsAt": "2026-08-16T00:00:00+05:30",
   "heroImageUrl": null,
@@ -280,16 +367,27 @@ be an `https://` URL, ≤500 characters.
 }
 ```
 
-Returns the created campaign (status `DRAFT`).
-**Errors: 400** duplicate code · inverted window · a plan missing `id`/`title`/`price`/`period`
-(the message names the index) · more than one `isDefault` · `bonusDays` out of range ·
-`priceInPaise` not a non-negative integer · `appleOfferCode` not uppercase `A–Z0–9` / over 64 chars.
-**Audit:** `OFFER_CREATE` (id, code, name).
+Returns the created campaign (status `DRAFT`). Drafts may freely overlap — the
+one-live-campaign-per-exam rule is applied on **activate**, not here.
 
-> ⚠️ A `priceInPaise` **at or above** the standard price is accepted on write — it is only rejected
-> at checkout, where the discount is dropped and standard price charged. Nothing on the create call
-> tells you this campaign will not discount, so double-check the number against the live standard
-> price before you activate.
+**Errors: 400** **missing `examId`** · **unknown `examId`** · duplicate code (codes are
+**globally** unique, not per exam — a share link cannot say which exam it meant) · inverted
+window · a plan missing `id`/`title`/`price`/`period` (the message names the index) · more than
+one `isDefault` · `bonusDays` non-zero or out of range · `priceInPaise` not a non-negative
+integer, or **not below that exam's standard price** for the tier's plan type ·
+`appleOfferCode` not uppercase `A–Z0–9` / over 64 chars.
+**Audit:** `OFFER_CREATE` (id, code, name, **examId**).
+
+> ⚠️ **The discount floor is checked against `examId`'s own `exam_plans` rows** — the same rows
+> checkout charges from — and a `priceInPaise` **at or above** that exam's standard price is now a
+> **400 on write**, naming the tier index, the amount and the standard it lost to. Before 2026-09
+> this read the `app_config` singleton, i.e. UPSC's prices, so an APPSC campaign priced correctly
+> for APPSC could be rejected and one priced *above* APPSC's list accepted and then silently ignored
+> at checkout. This is the single strongest reason `examId` had to become required.
+>
+> Two gaps remain, deliberately: a tier whose `id` names neither a yearly nor a monthly period
+> has no list price to compare against and is left alone (it may be presentation-only), and if the
+> plan read **fails**, authoring is not blocked. Neither is a reason to skip eyeballing the number.
 
 ## 4. Update a campaign
 
@@ -297,8 +395,24 @@ Returns the created campaign (status `DRAFT`).
 PATCH /sme/offers/:id
 ```
 
-Accepts `name`, `startsAt`, `endsAt`, `heroImageUrl`, `bannerImageUrl`, `plans`, `content`.
+Accepts `name`, `examId`, `startsAt`, `endsAt`, `heroImageUrl`, `bannerImageUrl`, `requiresCode`,
+`plans`, `content`.
 Tri-state: **omitted** = untouched · **null** = cleared · **value** = set.
+
+**`examId` is editable and tri-state — and it deliberately does NOT default.** Omitting it
+leaves the campaign where it is; sending `upsc-cse` by reflex on every save would drag every
+edited APPSC campaign back to UPSC. (This is why the required-on-create rule of §3 is *not*
+applied here: on PATCH, an omission is unambiguous.)
+
+Moving a campaign to another exam is allowed — unlike `code` — because the usual reason to send
+it is that the campaign was authored under the **wrong** exam, and the alternative (archive and
+recreate) burns the share code forever. It is not a free move:
+
+- the **discount floor is re-checked against the target exam's** `exam_plans` prices, so a move
+  that would turn the discount into a price rise is refused;
+- the **one-live-campaign window is re-checked in the target exam**, so a move that would collide
+  with a campaign already occupying that window is refused;
+- an unknown slug is a 400.
 
 `bannerImageUrl` follows the same tri-state rule as every other scalar field here: a portal form
 that has no banner input simply never sends the key, and the stored value survives untouched. Only
@@ -322,12 +436,18 @@ Moving the window of a `SCHEDULED`/`LIVE` campaign re-runs the overlap check.
 > Validation runs on the **merged** result, so an inherited price is still checked against the
 > standard price — a partial payload cannot smuggle in an invalid state.
 >
-> Note also that the audit snapshot records code, name, status, window and hero — **not the plans**.
-> A price edit is therefore not reconstructible from `sme_audit_log` alone; if a campaign's price is
-> in dispute, the charge itself (order/payment rows) is the record of truth.
+> **Corrected 2026-09-21:** the audit snapshot **does** record pricing. `OFFER_UPDATE` stores a
+> before/after of code, name, status, **`examId`**, window, hero **and the money-bearing subset of
+> every tier** (`id`, `price`, `priceInPaise`, `bonusDays`, `appleOfferCode`). A price edit — and a
+> tier silently losing its discount — is therefore reconstructible from `sme_audit_log`. `examId` is
+> in there for the same reason: moving a campaign to another exam changes which list price its
+> tiers are discounts against, so it is a pricing change even when no number in `plans` moved.
+> (The charge itself — order/payment rows — remains the record of truth for what a customer paid.)
 
-**Errors: 400** attempted code change · inverted window · overlap · invalid plans. **404** unknown id.
-**Audit:** `OFFER_UPDATE` (before/after of code, name, status, window, hero).
+**Errors: 400** attempted code change · unknown `examId` · inverted window · overlap **in the
+target exam** · invalid plans · a tier no longer below the **target exam's** standard price.
+**404** unknown id.
+**Audit:** `OFFER_UPDATE` (before/after of code, name, status, examId, window, hero, plans).
 
 ## 5. Activate — publish the campaign
 
@@ -433,6 +553,42 @@ price; the actual price check still happens when the tap lands on `/paywall`.
 **No caching** — same reasoning as `/paywall` itself: the response depends on the calling user's
 premium status, so anything keyed on method+url would leak one user's banner to another.
 
+### 7.1.1 There is now a carousel around it (2026-09-17)
+
+`GET /api/v1/paywall/banner` is **unchanged** — same route, same body, same rule — so every
+shipped client keeps working exactly as it does today. Nothing below alters it.
+
+New clients call **`GET /api/v1/banners?platform=android`** instead. That endpoint merges
+SME-authored, audience-targeted banners (`exam_banners`, see **[SME_BANNERS_API.md](./SME_BANNERS_API.md)**)
+with **this** campaign banner into one ordered list, where the campaign appears as
+`"kind": "campaign"` at a fixed `priority` of 0 and destination
+`https://go.prepmonkey.com/open/offer/<CODE>`.
+
+You do not author the campaign banner there. It is still just `bannerImageUrl` on the
+campaign, resolved by the same rule described above — the carousel calls that rule rather
+than restating it, precisely so the two surfaces can never disagree about the same
+campaign. An authored banner with a **positive** priority leads the campaign; a
+**negative** one trails it.
+
+### ✅ Closed 2026-09-21: `GET /sme/offers?exam=` is now wired
+
+The gap noted here previously — `ListOffersQueryDto` declared only `status`, so
+`?exam=appsc-group-1` hit `forbidNonWhitelisted` and returned *"property exam should not
+exist"* — is **fixed**. `exam` is declared, passed through and **validated**: a real slug
+filters, an unknown one is a **400**, and omitting it returns every exam's campaigns.
+
+Build the portal control. A client-side filter on the returned `examId` still works and is
+still correct for a page you already have, but it is no longer the only option.
+
+### App Store Connect groups are per exam
+
+Each exam owns its own ASC **subscription group** (`exams.apple_subscription_group_id`) and
+each of its plans owns a product (`exam_plans.apple_product_id`, globally unique). So the
+`appleOfferCode` / `appleProductId` on a tier must belong to **`examId`'s** product — an
+offer code configured against UPSC's product does nothing for an APPSC campaign, and the
+mismatch is invisible until an iPhone user is served the standard paywall. Source the
+product id from `GET /sme/exams`, for the exam you just selected, not from memory.
+
 ## 8. Previewing before launch
 
 The app resolves campaigns through `GET /api/v1/paywall` (a **user** endpoint, JWT). To QA an
@@ -447,7 +603,11 @@ unreleased pricing.
 A discounted campaign is configured in **two places** — App Store Connect and this API — and they
 must agree. Do them in this order:
 
-1. **Create the Offer Code in App Store Connect first.** On the yearly subscription product, add a
+0. **Decide the exam, first.** Everything below is per exam: the ASC subscription group, the
+   product the offer code hangs off, and the list price the discount floor is checked against.
+   `examId` is required on create and cannot be inferred (§3).
+1. **Create the Offer Code in App Store Connect first.** On **that exam's** yearly subscription
+   product (`exam_plans.apple_product_id`, inside `exams.apple_subscription_group_id`), add a
    one-time-use-free **Offer Code** with a **pay-up-front** discount for the first year at the
    campaign price. Cover new, active and lapsed customers — one offer code does all three.
 2. **Put that code on the campaign.** Set `appleOfferCode` to the ASC code (uppercase `A–Z0–9`,
@@ -484,16 +644,27 @@ Read it before building anything on this endpoint — every row carries a `signa
 *confidence level*, not a category (`ORDER` is certain, `TAP` is inferred and iOS-only), and a UI
 that blends the two is misleading.
 
+Its companion, **`GET /sme/offers/:id/purchased`** — everyone who completed a purchase on the
+campaign, end to end — is documented in
+**[§7b of the same guide](./SME_CAMPAIGN_ABANDONED_API.md#7b-companion-endpoint--who-actually-bought)**.
+Attribution is `orders.offer_code = <campaign code>` and nothing else, which is what keeps
+standard-price renewals inside the window out of the list. Both endpoints are scoped by the
+campaign row, so everyone they return bought (or nearly bought) **the campaign's own exam**.
+
 ---
 
 ## Common errors
 
 | Status | Cause | Fix |
 |---|---|---|
+| 400 | `examId is required (e.g. upsc-cse). Campaigns are per exam.` | **BREAKING, §3** — send `examId` on create. There is no default any more |
+| 400 | Unknown `examId`, or unknown `?exam=` on the list | Source the slug from `GET /sme/exams` |
+| 400 | `plans[n].priceInPaise (…) must be below the standard … price for exam …` | The floor is **that exam's** `exam_plans` price, not UPSC's |
+| 400 | `plans[n].bonusDays must be 0` | No checkout path honours bonus days yet; use a price discount |
 | 400 | `code` already exists | Codes are globally unique and permanent; pick another |
 | 400 | `code is immutable` | Archive the campaign and create a new one |
 | 400 | `endsAt must be after startsAt` | Check the offsets — an offset-less string is read as UTC |
-| 400 | `Window overlaps live campaign X` | Pause or end X first, or choose a non-overlapping window |
+| 400 | `Window overlaps live campaign X on exam Y` | Pause or end X first, or choose a non-overlapping window. The rule is **per exam** — a clash in UPSC does not block an APPSC campaign |
 | 400 | `is ENDED, which is terminal` | Ended/archived campaigns never come back — use **pause** next time |
 | 400 | `plans[n].period is required` | Every plan needs `id`, `title`, `price`, `period` |
 | 400 | `priceInPaise must be an integer` | Paise, not rupees, and no decimals — ₹4,990 is `499000` |

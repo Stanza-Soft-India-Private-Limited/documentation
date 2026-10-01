@@ -1,8 +1,10 @@
 # Campaign form — what to add, change and remove
 
+> Changed 2026-09-21 — exam dimension on users, orders, offers, banners; two BREAKING calls (see [WHAT_CHANGED_2026-09-21.md](./WHAT_CHANGED_2026-09-21.md)).
+
 **Audience:** whoever owns the SME portal's `/offers` page (list, **New campaign**, and **Edit**).
 **Observed against:** portal **v2.37.1**, 2026-08-22, editing the live `FREEDOM15` campaign.
-**Contract re-verified against backend `8249ea6` (deployed) and mobile `2ea8eaf` on 2026-08-22.**
+**Contract re-verified against backend `4f6622e` and mobile `2ea8eaf` on 2026-09-21.**
 **Scope:** the form and the list page only. The API contract itself lives in
 [`SME_OFFERS_API.md`](./SME_OFFERS_API.md) — this doc does not repeat it, it tells you which parts of
 it the form is currently not exposing.
@@ -101,6 +103,12 @@ Helper text, verbatim:
 - Warn if `priceInPaise` does not correspond to the rupee figure typed into `Price`. Do not block —
   a deliberate mismatch is occasionally valid — but make it visible.
 - `0` is not a discount, it is free. Treat it as a hard confirm.
+- **Compare against the SELECTED exam's list price, not UPSC's.** Since `4f6622e` the backend
+  checks the floor against **`examId`'s own `exam_plans` rows** and returns a 400 on save —
+  `plans[n].priceInPaise (…) must be below the standard … price for exam …`. Fetch that exam's
+  plans when the exam select changes and show the standard price inline, so the operator sees
+  the ceiling before they type. A ₹4,990 tier is a discount in UPSC and a **price rise** in a
+  cheaper state exam.
 
 ### 3.2 ADD `appleOfferCode`
 
@@ -254,9 +262,36 @@ are all empty: *"This tier will render with empty space where the badge/subtitle
 
 ## 7. Field-by-field summary
 
+> ### 🔴 New and unavoidable: `examId` is the FIRST field on the form
+>
+> Since backend `4f6622e` (2026-09-21), `POST /sme/offers` **requires** `examId`. Omitting it
+> is a 400 — `examId is required (e.g. upsc-cse). Campaigns are per exam.` — so **the create
+> form cannot submit at all** until this control exists.
+>
+> | | |
+> |---|---|
+> | Control | **Select**, populated from `GET /sme/exams` (label = exam name, value = slug) |
+> | Position | **First field in Identity & window**, above `code` |
+> | Required | Yes, on create. **Do not prefill `upsc-cse`** — an unchosen default is exactly the failure this change removes; start on an empty "Select an exam…" option |
+> | On edit | Editable, and **tri-state**: omit the key to leave the campaign where it is. Only send it when the operator actually changes the select |
+> | Why it matters here | It decides **which exam's list prices `priceInPaise` is checked against** (§3.1) and **which exam's window the one-live-campaign rule uses**. The old `upsc-cse` default filed APPSC campaigns against UPSC prices — invisible to every APPSC paywall while the portal reported them live |
+>
+> **Lock it after creation?** No — keep it editable, because the usual reason to change it is
+> that the campaign was authored under the wrong exam, and the alternative (archive +
+> recreate) burns the share code forever. But **warn on change**: moving a campaign re-checks
+> the discount floor and the window against the *target* exam and can be refused with a 400.
+>
+> **On the list page:** add an **Exam** column (every row now carries `examId`) and a filter
+> control that sends **`?exam=<slug>`** — that parameter is wired and validated as of
+> `4f6622e`, so the old advice to filter client-side is obsolete. An unknown slug returns 400,
+> not an empty page. And **stop treating two LIVE campaigns as a data error**: the rule is one
+> live campaign *per exam*, so UPSC and APPSC can each have one at the same time.
+
 | Section | Field | Action | API field |
 |---|---|---|---|
 | List page | "Prices are display strings…" banner | **REMOVE** | — |
+| List page | Exam column + exam filter (`?exam=`, validated) | **ADD** | `examId` |
+| Identity & window | **Exam** select — first field, required on create | **ADD** | `examId` |
 | Identity & window | Only reachable with share link | **ADD** (toggle, default ON) | `requiresCode` |
 | Images | Section rename HERO IMAGE → IMAGES | **CHANGE** | — |
 | Images | Banner image upload, 5:2 / 1500×600 | **ADD** | `bannerImageUrl` |
@@ -285,6 +320,14 @@ consented to. Do not add a "pull from real users" option.
 
 ## 8. Definition of done
 
+- [ ] **Exam** is the first field on the create form, sourced from `GET /sme/exams`, with **no
+      prefilled default**, and creating without it is impossible from the UI.
+- [ ] The list page shows an **Exam** column and its filter sends `?exam=<slug>`; two LIVE
+      campaigns in different exams render without a warning.
+- [ ] Changing the exam on an existing campaign warns that the price floor and window are
+      re-checked against the target exam, and surfaces the backend 400 verbatim if refused.
+- [ ] The `priceInPaise` helper shows **the selected exam's** standard price, and the form
+      refuses to submit a tier at or above it.
 - [ ] Both false pricing banners are gone from the list page and the PLANS section.
 - [ ] `requiresCode` is a visible toggle, defaulting ON for a new campaign.
 - [ ] Every plan row has `priceInPaise` and `appleOfferCode`, and `Bonus days` is gone.

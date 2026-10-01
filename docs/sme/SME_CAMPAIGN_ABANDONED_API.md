@@ -1,5 +1,9 @@
 # SME — Campaign Abandonment API
 
+> Changed 2026-09-21 — stale-text pass (telemetry live in 2.0, version ladder, links). Exam-dimension changes follow in [WHAT_CHANGED_2026-09-21.md](./WHAT_CHANGED_2026-09-21.md).
+> Changed 2026-09-21 — exam dimension on users, orders, offers, banners; two BREAKING calls (see [WHAT_CHANGED_2026-09-21.md](./WHAT_CHANGED_2026-09-21.md)).
+> Changed 2026-09-21 — per-exam broadcast, validated segment exam (+ fix), survey targetExams, feedback ?exam= (see [WHAT_CHANGED_2026-09-21.md](./WHAT_CHANGED_2026-09-21.md)).
+
 **Endpoint:** `GET /api/v1/sme/offers/:id/abandoned`
 **Auth:** `x-api-key: <API_KEY_SECRET>` (same key as every other `/sme/*` route)
 **Response:** raw JSON. **There is no `{success, data}` envelope** — `ResponseInterceptor` exists in
@@ -81,10 +85,53 @@ is `requiresCode: true` — so a 1.7 tap can *never* have been campaign intent. 
 pure false positive. Events whose `app_version` is absent or non-numeric are always excluded: a
 version we cannot attribute cannot be shown to be campaign-capable.
 
+1.8 is a **floor, not the current build.** The current store build is **2.0** (Android 27, iOS
+2.0 build 3, released 2026-09-17), and the default is deliberately left at `1.8` so that every
+campaign-capable build from 1.8 upward is counted. Do not raise it to track the newest release —
+that would silently drop real abandonment from users who have not updated.
+
 ---
 
 ## 3. Response
 
+> ### Every row belongs to the campaign's exam
+>
+> A campaign discounts **exactly one exam** (`examId`), so everyone this endpoint returns
+> reached for **that** exam — there is no `?exam=` here, and one would be meaningless. Two
+> campaigns can be `LIVE` at the same time in different exams, so **a screen built on this
+> endpoint must name its exam** or two abandonment lists become indistinguishable.
+>
+> ✅ **The `campaign` block carries `examId`** (added 2026-09-21; it did not at `4f6622e`).
+> Name the exam straight from this response — the extra `GET /sme/offers/:id` round-trip the
+> previous version of this doc prescribed is no longer needed. Do not infer the exam from a
+> user's `activeExamId`: a UPSC-studying user can abandon an APPSC campaign.
+
+> 🔎 **Why this one body is not a fresh staging capture.** This endpoint needs a
+> campaign, and **staging holds none** (`GET /sme/offers` → `{"data":[],"total":0}`,
+> captured 2026-09-21) — creating a promotional campaign there was out of scope for this
+> pass. The body below is a **real production capture from the FREEDOM15 campaign**, kept
+> because a synthetic one would not show the funnel behaving. Its shape was re-verified
+> against `c0a8fe5`, and the one field added since (`campaign.examId`) is shown.
+>
+> What *was* captured on staging 2026-09-21 (backend `f6329e6`) is the not-found path —
+> `GET /sme/offers/62b20aac-eb13-42af-89bb-e36591819e7b/abandoned` → **404**:
+>
+> ```json
+> {
+>   "success": false,
+>   "message": "Offer 62b20aac-eb13-42af-89bb-e36591819e7b not found",
+>   "error": "Not Found",
+>   "statusCode": 404,
+>   "timestamp": "2026-09-21T14:46:07.770Z",
+>   "path": "/api/v1/sme/offers/62b20aac-eb13-42af-89bb-e36591819e7b/abandoned",
+>   "method": "GET"
+> }
+> ```
+>
+> — i.e. an unknown campaign id is a clean 404, **not** an empty list. A portal screen
+> must tell "this campaign does not exist" apart from "nobody abandoned it".
+
+<!-- shape verified against code @c0a8fe5 — production capture; staging holds no campaigns, see note above -->
 ```jsonc
 {
   "campaign": {
@@ -92,6 +139,7 @@ version we cannot attribute cannot be shown to be campaign-capable.
     "code": "FREEDOM15",
     "name": "Freedom Sale 2026",
     "status": "LIVE",
+    "examId": "upsc-cse",                       // the exam this campaign discounts
     "startsAt": "2026-08-09T18:30:00.000Z",
     "endsAt":   "2026-08-23T18:29:00.000Z"
   },
@@ -111,10 +159,10 @@ version we cannot attribute cannot be shown to be campaign-capable.
   "pageCounts": { "view": 0, "order": 1, "tap": 10, "both": 1 },   // THIS PAGE only
   "data": [
     {
-      "userId": "45c3c221-e811-472b-912b-9fe4e3993b01",
-      "name": "Pranay tej",
-      "email": "titangaming1109@gmail.com",
-      "phoneNumber": "+916369842370",
+      "userId": "3ad0f52c-6b71-4c90-8e45-91d3b7fa20e6",
+      "name": "K. Nair",
+      "email": "aspirant-4@example.com",
+      "phoneNumber": "+91XXXXXXXXXX",
       "userStatus": "UNSUBSCRIBED",
       "signal": "ORDER",
       "attempts": 2,
@@ -259,9 +307,22 @@ what stops general payment records bleeding into a campaign number:
 This is deliberately *not* "Apple revenue between these dates", which is the shape that produces
 inflated campaign numbers. If a purchase is not stamped with the code, this campaign did not cause it.
 
+**Exam:** every order here bought **the campaign's own exam**, because the campaign is what the
+code belongs to. As on `/abandoned`, the `campaign` block **does include `examId`** (added
+2026-09-21) — no second call to `GET /sme/offers/:id` is needed. (The underlying `orders` rows
+carry their own `examId` too; that one is visible on `GET /sme/orders`, not projected into the
+rows here.)
+
+> 🔎 **Same limitation as §3, same reason** — staging holds no campaigns, so this body is
+> shape-from-code rather than a capture. The staging-captured behaviour is the not-found
+> path: `GET /sme/offers/62b20aac-eb13-42af-89bb-e36591819e7b/purchased` → **404**
+> `{"success":false,"message":"Offer 62b20aac-eb13-42af-89bb-e36591819e7b not found","error":"Not Found","statusCode":404,"timestamp":"2026-09-21T14:46:07.861Z","path":"/api/v1/sme/offers/62b20aac-eb13-42af-89bb-e36591819e7b/purchased","method":"GET"}`.
+
+<!-- shape verified against code @c0a8fe5 — staging holds no campaigns, see note above -->
 ```jsonc
 {
-  "campaign": { … }, "window": { … },
+  "campaign": { … },   // id, code, name, status, examId, startsAt, endsAt
+  "window": { … },
   "pageTotals": { "revenuePaise": 0, "savedPaise": 0 },   // page-local
   "data": [
     {

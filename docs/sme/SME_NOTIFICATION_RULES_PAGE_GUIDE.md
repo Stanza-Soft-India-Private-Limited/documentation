@@ -1,5 +1,9 @@
 # Notification rules — page guide
 
+> Changed 2026-09-21 — stale-text pass (telemetry live in 2.0, version ladder, links). Exam-dimension changes follow in [WHAT_CHANGED_2026-09-21.md](./WHAT_CHANGED_2026-09-21.md).
+> Changed 2026-09-21 — exam-scoping gaps closed (existing contracts).
+> Changed 2026-09-21 — per-exam broadcast, validated segment exam (+ fix), survey targetExams, feedback ?exam= (see [WHAT_CHANGED_2026-09-21.md](./WHAT_CHANGED_2026-09-21.md)).
+
 **Audience:** whoever owns the SME portal. **Feed this to the portal's coding session.**
 **Scope:** a NEW screen. Nothing to migrate, nothing to remove.
 **Contract:** [`SME_NOTIFICATION_RULES_API.md`](./SME_NOTIFICATION_RULES_API.md) — this doc does
@@ -52,6 +56,27 @@ developer.
 disable the Enable button. Only `pib_today` is in this state today: there is no PIB content in
 the product. Do not let an operator turn it on and wonder why nothing happens.
 
+### The one field that is NOT in `configSchema`: `examId`
+
+`examId` lives on the rule itself, not in the trigger's config, so the generated form will not
+produce it — **add it by hand**, next to `name`. The list page already has an exam column
+(§4); the form must be able to set what that column shows.
+
+| | |
+|---|---|
+| **Control** | Single select. |
+| **Options** | `GET /sme/exams` → one option per exam, labelled `shortName`, valued `id`. Never hardcode the list. |
+| **Extra option** | **"All exams"**, first in the list, which sends `examId: null`. |
+| **Wire format** | `examId: "<slug>"` or `examId: null`. On create the field may also simply be omitted, which means every exam. On update, **`null` is what clears it** — omitting it leaves the current scope untouched. |
+
+⚠️ **"UPSC CSE" is a far bigger audience than "people who picked UPSC".** `examId: "upsc-cse"`
+also matches every user whose `active_exam_id` is **NULL**, and that is the overwhelming
+majority — only the app's exam switcher ever writes that column. So a UPSC-scoped rule and an
+"All exams" rule reach almost the same people today; only a state exam (`appsc-…`) narrows to
+users who actively switched. Say this in the form, beside the select, not in a tooltip —
+picking `upsc-cse` believing it excludes everyone else is the mistake this warning exists for.
+Full detail: [`SME_NOTIFICATION_RULES_API.md`](./SME_NOTIFICATION_RULES_API.md) §4.
+
 ---
 
 ## 2. The copy editor needs the variable list beside it
@@ -82,6 +107,11 @@ Enable as reachable before Preview has been run at least once.
 
 **3.1 Preview — `POST /:id/preview`.** Returns `matchedUsers`, `afterPrefs`, `afterCaps`, a
 `suppressed` breakdown and a rendered `sample`. Sends nothing.
+
+**Every number here is scoped to the rule's `examId`** — the audience query filters on
+`active_exam_id` (with NULL folded into `upsc-cse`), and the rendered `sample` resolves its
+`daysToExam` and trial length through that same exam. Change the exam select and the preview
+must be re-run; show the exam beside the funnel so a stale count is never read as the new one.
 
 Show the funnel as a funnel, not four unrelated numbers — the campaign analytics page already
 suffers from "four denominators with no bridge" and this is the same trap:
@@ -170,9 +200,13 @@ different things and `isRead` is much larger:
 `tapRate` is the honest number for "is this rule worth sending". `isRead` overstates
 engagement badly. If both appear on one screen, label them or someone will compare them.
 
-⚠️ **`tapped` will be 0 for every rule until the mobile release that reports taps ships.** Do
-not present a 0% tap rate as a verdict before then — show "not yet available" instead, or the
-first person to look will kill a rule that is working.
+⚠️ **`tapped` is reported by the app, and only by app 2.0 and later.** The server side is live
+(`POST /notification-preferences/tapped` stamps `notification_dispatch.tapped_at`); app **2.0**
+went to both stores on **2026-09-17** and is the first build expected to call it — the backend
+cannot prove which client versions do, so confirm against the data before trusting a rate.
+A tap rate therefore describes the **2.0-adopted share** of a rule's recipients, and it climbs
+as people update. Do not present a low tap rate as a verdict while `sent` still includes older
+builds — show the covered share, or the first person to look will kill a rule that is working.
 
 ---
 
@@ -198,6 +232,8 @@ payment receipt arrived at 23:40.
 - **No "send now" button.** There isn't an endpoint, deliberately. Ad-hoc sends already exist
   at `/sme/notifications/{broadcast,segment}` and `/sme/users/:id/notify` — and those bypass
   preferences, quiet hours and the cap, which is exactly why they are separate from rules.
+  (Both of those now take an `exam` too, with the same NULL-means-UPSC rule as a rule's
+  `examId` — see [SME_NOTIFICATIONS_API.md](./SME_NOTIFICATIONS_API.md) §2–§3.)
 - **No `triggerKey` editor on an existing rule.** It is immutable; the API rejects it.
   Repointing a rule's audience while keeping its copy and history would make its analytics a
   lie. Offer "duplicate as new rule" instead.

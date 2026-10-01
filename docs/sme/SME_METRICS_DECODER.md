@@ -1,10 +1,14 @@
 # SME Portal — Metrics Decoder
 
+> Changed 2026-09-21 — stale-text pass (telemetry live in 2.0, version ladder, links). Exam-dimension changes follow in [WHAT_CHANGED_2026-09-21.md](./WHAT_CHANGED_2026-09-21.md).
+> Changed 2026-09-21 — ?exam= on every analytics route, examCoverage, purchase-funnel (see [WHAT_CHANGED_2026-09-21.md](./WHAT_CHANGED_2026-09-21.md)).
+
 **What this is:** one line per number on every SME screen — what it literally counts, and what it does *not*.
 Written so you can answer "what is this number?" in a meeting without opening code.
 
 **Audience:** us + the SME portal team.
 **Source of truth:** `src/modules/sme/services/*` in this repo. Anything the portal computes itself is marked **[portal-side]**.
+**Format:** the PDF export was removed on 2026-09-21; this markdown is the only maintained copy.
 
 ---
 
@@ -24,6 +28,36 @@ Rules of thumb:
 - All day buckets are **IST (UTC+5:30)**. A "day" is midnight-to-midnight India time, not UTC.
 - Chat, mains evaluation and PYQ-variation have **zero persistence** — they never appear in any usage number, anywhere.
 
+### 0.1 The fourth axis of disagreement — **which exam** a number belongs to
+
+The three planes above explain why two screens disagree about *when* and *how much*. Since
+2026-09-21 every `/sme/analytics/*` route also takes `?exam=`, and that adds a fourth,
+independent way for two correct numbers to disagree — because **"exam" is four different
+columns** and no two of them answer the same question.
+
+| # | "Exam" means | Column | True for | The disagreement it causes |
+|---|---|---|---|---|
+| 1 | **What the person is studying** | `user_profiles.active_exam_id` | **as of right now**, retroactively applied to their whole history | A June signup who switched to APPSC last week is a **June APPSC signup**. There is no switcher history and never was. |
+| 2 | **What the person has bought** | a live row in `user_exam_entitlements` | per exam, exact | An APPSC subscriber who is *studying* UPSC is **premium in APPSC and free in UPSC**, both at once. |
+| 2b | **The person-level premium mirror** | `user_auth.premium_expires_at` / `status` | the person, not the exam | Flips on **any** purchase. This is what "premium" means with **no** `?exam=`, so the un-filtered premium count is **≥** the sum of the per-exam ones. |
+| 3 | **Which exam the request was made in** | `api_usage.exam_id` / `api_usage_daily.exam_id` | per request, **only from 2026-09-21** | Everything before that deploy is **NULL = unknown**, excluded from every exam. Per-exam usage history simply does not exist yet. |
+| 4 | **Which exam the content is for** | `exam_ids` / `examIds` arrays (`*` = all) | per document | A `*`-tagged document counts for **every** exam, so per-exam content numbers sum **above** the total. |
+
+Two NULL rules that **point in opposite directions**, which is the single most confusing thing
+on this page:
+
+* **NULL `active_exam_id` ≡ `upsc-cse`.** The person onboarded before app 2.0 (2026-09-17, which
+  made the exam picker onboarding step 1) and has never used the home switcher — so the default
+  is literally what they were served. This is still **most of the user base** and only shrinks
+  as 2.0 is adopted. Matching the literal slug alone would report UPSC as having almost no users.
+* **NULL `api_usage.exam_id` = "not recorded", and the row is EXCLUDED** — `upsc-cse` included.
+  Here NULL means the request predates the column, not that it was UPSC.
+
+**Practical consequence for a meeting:** with no `?exam=` every number in this document is a
+**cross-exam total**. With `?exam=`, a person-sourced number is retro-attributed and a
+request-sourced number starts on 2026-09-21. The two are not comparable, and the response tells
+you which you are holding (`examCoverage` = request-sourced).
+
 ---
 
 ## 1. Analytics screen (`/analytics`)
@@ -35,7 +69,7 @@ Powered by `GET /sme/analytics` — but this endpoint is **built by the portal**
 | Card | What it is | Watch out |
 |---|---|---|
 | **Total Users** | Count of every row in `user_auth`. | ⚠️ Portal fetches at most **6,000 users** (100/page × 60 pages). Past 6,000 this card silently stops growing — and so does every other number on this screen. |
-| **Premium Access** | Users with premium *access right now* = `SUBSCRIBED` and not expired, **OR** `ACTIVE` and still inside the 14-day trial. | Includes trials. This is "who can use paid features", not "who paid". |
+| **Premium Access** | Users with premium *access right now* = `SUBSCRIBED` and not expired, **OR** `ACTIVE` and still inside their trial window. | Includes trials. This is "who can use paid features", not "who paid". ⚠️ **The trial window is per exam, not 14 days** (APPSC Group 1 is currently 0) — corrected 2026-09-21; before that this number used a fixed 14 days for everyone and over-counted on any exam with a shorter trial. |
 | **Paying Subscribers** | The `premiumState = 'Premium'` bucket = `SUBSCRIBED` and not expired. | The honest revenue-side number. Always ≤ Premium Access. |
 | **Revenue (captured)** | Sum of `CAPTURED` payment amounts, in ₹, **excluding** `MANUAL` grants. | Manual comps are shown separately in "Revenue by source" so the headline isn't inflated by free grants. ⚠️ This sums the **payment** ledger, not paid orders — see the note below. |
 | `x% onboarded` | Share of users with `user_profiles.onboarding_completed = true`. | Current state, not a cohort. |
@@ -56,7 +90,7 @@ Powered by `GET /sme/analytics` — but this endpoint is **built by the portal**
 
 | Chart | Each bar is | Watch out |
 |---|---|---|
-| **Subscription funnel** | Count of users per `premiumState`: `Premium` (paid, live) · `Trial` (in the 14-day window) · `Trial Ended` (lapsed, never paid) · `Churned` (paid once, now expired) · `Downloaded` (signed up, trial still open but nothing else). | Derived from timestamps, not from the `status` column — so it's correct even for users who haven't opened the app since expiry. Exactly one bucket per user. |
+| **Subscription funnel** | Count of users per `premiumState`: `Premium` (paid, live) · `Trial` (inside **that user's exam's** trial window — never hard-code 14) · `Trial Ended` (lapsed, never paid) · `Churned` (paid once, now expired) · `Downloaded` (signed up, trial still open but nothing else). | Derived from timestamps, not from the `status` column — so it's correct even for users who haven't opened the app since expiry. Exactly one bucket per user. |
 | **User status** | The raw `user_auth.status` enum (ACTIVE / SUBSCRIBED / SUSPENDED / …). | This is the *stored* column and can be stale — `status` is only refreshed on an authenticated request. Prefer Subscription funnel. |
 | **Sign-in provider** | Google / Apple / phone, from `user_auth.provider`. | |
 | **Order status** | Orders by `CREATED` / `PAID` / `FAILED`. | An abandoned checkout leaves a `CREATED` row forever, so `CREATED` is usually the biggest bar and means nothing. |
@@ -153,6 +187,34 @@ Straight from the **Mux Data API**, not our database.
 | **Last seen** | `max(sessions.lastAccessedAt)` — last time a session token was used. | Closer to "last opened the app" than Actions 30d. |
 | **Premium until** | `premium_expires_at`. | NULL for trial users and for never-paid users alike. |
 
+### Exam-scoped keys (new 2026-09-21)
+
+These appear **only** when a panel was fetched with `?exam=`. With no exam selected none of them
+exist and every number on the screen is a cross-exam total (§0.1).
+
+| Key | What it is | Watch out |
+|---|---|---|
+| **`examCoverage.since`** | The earliest request **carrying an exam** inside the window, on the routes sourced from `api_usage` (`summary`, `dau`, `paywall-hits`, `heatmap`, `endpoints`, `release-health`). | ⚠️ **This is the start date of the per-exam number, not of the product.** The column shipped on 2026-09-21; everything before it is excluded. An ISO instant on most routes, an **IST `YYYY-MM-DD`** on `dau` / `endpoints` (their source is the daily rollup). `null` = nothing in this window carries an exam at all → the panel is *"not recorded yet"*, not zero. |
+| **`examCoverage.unknownRows`** | How many rows in **this exact window** were dropped for having no exam. | Not an error count and not a backlog. It is large today by construction and shrinks to zero as the pre-deploy rows age out (raw at 30 days, rollup at 120). |
+| **`meta.clientErrorsExamScoped`** (release-health) | Always **`false`** when an exam filter is on. | ⚠️ `clientErrors` comes from `auth_events`, which has **no exam column and no relation to join one through**. So with `?exam=` that one column stays **app-wide** while `activeUsers` / `requests` beside it are narrowed — which makes **`clientErrorsPerActiveUser` an overstatement**, not a per-exam rate. Judge builds on `errorRateExcludingPaywallPct` when an exam is selected, and never compare crash rates across exams. |
+| **`examSelected.cohortSignups` / `windowSignups`** (onboarding-funnel) | "N of M signups in this window are yours." `cohortSignups` is the filtered number the rest of the response describes; `windowSignups` is **every** signup in the window, all exams. | The two denominators are deliberately different. `byExam` is computed over the **whole** window, not the filtered cohort — a breakdown of a set already narrowed to one exam would be a single bar. |
+| **`examSelected.explicitlySelected(Pct)`** | Window signups carrying a **non-NULL** `active_exam_id` — i.e. who came through app 2.0's picker or have used the switcher. | This is an **adoption** metric wearing a funnel's clothes. It rises with 2.0 uptake, not with product quality. |
+| **`examSelected.nullCount` / `nullBucketedAs`** | Window signups who never picked (pre-2.0 onboarding, switcher unused). Folded into `upsc-cse` in `byExam` and in every other per-exam number in the API. | The reason `upsc-cse` is not empty. When this number is large, "UPSC" partly means "unclassified". |
+| **`examSelected` is not a stage** | It is a **sibling key** of `stages[]`, never a sixth entry in it. | Deliberate: `stages` is indexed positionally by the portal, so inserting a stage would silently renumber every existing one — for a caller who never asked about exams. |
+| **the `authEvents` block under `?exam=`** | Stays **app-wide**. | A pre-auth event has no user to join an exam through. So an exam-scoped funnel sits next to an un-scoped failure panel. Label it, or a reader will attribute every OTP failure in the country to one exam. |
+
+### Purchase funnel (`/insights/purchase-funnel`) — new 2026-09-21
+
+`GET /sme/analytics/purchase-funnel`. `days` 1–90 (default 30) — `auth_events` is purged at 90.
+
+| Number | What it is | Watch out |
+|---|---|---|
+| **Paywall viewed / Upgrade tapped / Checkout opened / Checkout abandoned / Purchase failed** | **Distinct users** per IST day who emitted that `auth_events` type. Not event rows — a paywall re-renders. | ⚠️ **Client-emitted by app 2.0+ only**, through the public diagnostics ingest. A user on an older build is invisible, so **every step is a floor** and a rising funnel can be adoption rather than improvement. Rows with a NULL `user_id` are *unattributable* and excluded — not zero. |
+| **Orders paid** | `orders` at `PAID`, `is_test = false`, by the order's own IST creation day. | The only **server-truth** number on the panel. It is not joined to the events. |
+| **Conversion %** | `ordersPaid ÷ paywallViewed × 100`, one decimal. | ⚠️ **`null`, never `0`, on a day with no views** — "no denominator" and "converted nobody" are different facts, and the first usually means the day predates the emitting build. ⚠️ **It can exceed 100%, and that is information, not a bug**: someone bought without a recorded paywall view, so the number is measuring **emitter coverage**. Do not clamp it and do not "fix" it. |
+| **Totals** | Per-day distinct counts **summed**. | A user who viewed the paywall on three days counts **three times**. It is the only total consistent with the chart above it; a window-wide distinct count would not add up. |
+| **Per-exam conversion %** | Steps attributed by the user's **current** `active_exam_id`; `ordersPaid` by `orders.exam_id`. | ⚠️ A **retro-attributed denominator** with an **exactly-attributed numerator**. Read a per-exam conversion as directional only; the all-exams number (no `?exam=`) is the exact one. The service ships this sentence in `caveats` verbatim. |
+
 ---
 
 ## 3. Insights → Question quality (`/insights/question-quality`)
@@ -181,7 +243,7 @@ Answers "should we force-update?". `GET /sme/analytics/release-health`. Default 
 
 | Number | What it is | Watch out |
 |---|---|---|
-| **App version** | The `x-app-version` header on each request. | ⚠️ **`pre-1.7 (no x-app-version header)` is a real cohort, not missing data** — the header shipped with 1.7, so every older build lands there. Never delete or merge that row. |
+| **App version** | The `x-app-version` header on each request. | ⚠️ **`pre-1.7 (no x-app-version header)` is a real cohort, not missing data** — the header shipped with 1.7, so every older build lands there. Never delete or merge that row. Current store build is **2.0** (Android 27, iOS 2.0 build 3, released 2026-09-17), so expect rows up to 2.0; `AppConfig.minAppVersion` on production is **1.0.0**, i.e. no forced update is in effect. |
 | **Active users** | Distinct users who made a request on that build × platform. | A user on two builds in the window counts in **both** rows. |
 | **Requests** | Captured authenticated requests for that build. | Public/login routes are not captured — **a build that can't get past login is invisible here.** Its signal shows up in Client errors. |
 | **Error rate (excl. paywall)** | (4xx + 5xx − 402) ÷ (requests − 402). | **This is the number to judge a build on.** |
@@ -223,8 +285,12 @@ Three caveats, all load-bearing:
 
 - It covers **only notifications sent by a rule**. Ad-hoc sends (`/sme/notifications/broadcast`,
   `/segment`, `/sme/users/:id/notify`) write no dispatch row and are still `isRead`-only.
-- **`tapped` is 0 for every rule until the mobile release that reports taps ships.** Until
-  then a 0% tap rate means "not measured", not "nobody tapped". Do not kill a rule on it.
+- **`tapped` is client-reported, and only app 2.0 and later report it.** The server side is
+  live (`POST /notification-preferences/tapped` stamps `notification_dispatch.tapped_at`);
+  app **2.0** shipped to both stores on **2026-09-17** and is the first build expected to call
+  it, which the backend cannot itself prove — confirm in the data. So `tapRate` describes the
+  2.0-adopted share of a rule's recipients and climbs with adoption. A low rate means "partly
+  measured", not "nobody tapped". Do not kill a rule on it.
 - **Delivery is still not tracked.** A tap proves delivery; the absence of one does not prove
   non-delivery. `tapRate` remains a floor, not a rate.
 
@@ -255,8 +321,8 @@ construction, and the comparison invites exactly the wrong conclusion.
 | **Median / p90 time to reach** | Nearest-rank percentile, so it's always a duration someone really experienced. | **Stage 3 has no timing at all** — there is no `onboarding_completed_at` column, and inventing one from `updated_at` would be a lie. Stage 4 times only the *completed* path; a skip has no timestamp. |
 | **Sample coverage %** | Share of people at that stage who carry a usable timestamp. | Low coverage = the median describes a minority. |
 | **First action `bySource`** | Which of the 6 tables produced the first action. | ⚠️ `psychometric_test_results` is in that union — so a user whose only action was the psychometric test satisfies **stage 5 with the same row that satisfied stage 4**. This breakdown is how you see how many. |
-| **Auth events** (login failed / otp send failed / otp verify failed) | App-wide pre-auth failures for that IST day, from `auth_events`. | ⚠️ **Capture began 2026-07-23** — days before that show `not rec.`, never 0. And coverage is **split**: `otp_send_failed` is emitted server-side and is **real**; `login_attempt / login_success / login_failed / otp_verify_failed` are **mobile-only and stay at 0 until that app build ships**. A zero there means "not recorded", **never** "no failures". |
-| **Login success rate** | login_success ÷ login_attempt for the covered days. | Meaningless until the mobile build lands (see above). |
+| **Auth events** (login failed / otp send failed / otp verify failed) | App-wide pre-auth failures for that IST day, from `auth_events`. | ⚠️ **Capture began 2026-07-23** — days before that show `not rec.`, never 0. And coverage is **split**: `otp_send_failed` is emitted server-side and is **real**; `login_attempt / login_success / login_failed / otp_verify_failed` are **client-emitted by app 2.0 (released 2026-09-17) and by no older build**, so they are a **floor** that grows with 2.0 adoption. A low number there means "partly recorded", **never** "no failures". |
+| **Login success rate** | login_success ÷ login_attempt for the covered days. | Both terms come only from 2.0 devices, so the ratio describes the 2.0 cohort, not the install base (see above). |
 | **Worst-day correlation** | The covered day with the worst phone-verification rate, with that day's OTP failures beside it, plus the median OTP-verify failures for comparison. | Needs a day with **≥5 signups**. Its whole purpose: put an OTP spike next to the verification drop it caused. |
 
 ---
@@ -286,6 +352,18 @@ construction, and the comparison invites exactly the wrong conclusion.
 2. **Analytics is capped at 6,000 rows per list.** Total Users, revenue totals, signups-by-month and every bar on that screen quietly stop growing past that; failed pages are silently dropped too. Not biting yet — 3,989 users at ~68/day — but it starts truncating around **late August 2026**. **[portal-side]** — raise the page cap or move the aggregation to our backend.
 3. **Plane-B cards still over-promise their window.** Release Health is now capped to 7/14/30 and the heatmap carries a note, but **paywall hits still offers a 7/30/60/90 selector over ~30 days of data**.
 4. **The Onboarding Funnel's stage-5 breakdown renders `[object Object]` and `NaN%`** — the portal is stringifying an array of objects. Still present on v2.32.0. The 1,079 headline above it is sound.
+
+### Misleading by construction (not defects — read them before quoting)
+
+These four are **working as designed**. They are listed here because each one will be reported
+as a bug, and each one has a correct sentence that must travel with it.
+
+| # | The number | Why it misleads | What to say instead |
+|---|---|---|---|
+| A | **Every analytics number with no `?exam=`** | It is a **cross-exam total**. The app has sold APPSC since 2026-09-08 and shipped multi-exam on 2026-08-25, so an MAU figure quoted off this screen is MAU across all exams — and the un-filtered "premium" count uses the **person-level mirror**, which flips on any purchase. | Say "…across all exams" out loud. If someone wants UPSC specifically, pass `exam=upsc-cse` — and then read row B. |
+| B | **Per-exam usage history before 2026-09-21** | It does not exist. `api_usage.exam_id` was added that day; earlier rows are NULL and are **excluded**, UPSC included. A per-exam DAU chart therefore *starts* on deploy day. | "Per-exam request data starts 21 Sep 2026 — `examCoverage.since` says so on the response." **Never** compare a per-exam number with a pre-deploy all-exam number; the older one contains every exam. |
+| C | **Any per-exam number sourced from `active_exam_id`** (signups, retention, churn, features, platforms, notifications, the funnel cohort) | **Retro-attribution.** The user is attributed to the exam they have picked *today*, applied backwards over their whole history. There is no switcher history and the schema has nowhere to keep one. | "Attributed to each user's current exam." Directionally useful, exactly wrong for anyone who switched. Worst on a **new** exam, where switchers are a large share. |
+| D | **`clientErrors` / `clientErrorsPerActiveUser` on an exam-filtered release-health** | `auth_events` has no exam column, so that column stays **app-wide** while `activeUsers` beside it is narrowed. The ratio is an **overstatement** by roughly the inverse of the exam's share of traffic. | `meta.clientErrorsExamScoped: false` is on the response; surface it. Judge exam-filtered builds on `errorRateExcludingPaywallPct`, and compare crash rates only with the exam filter **off**. |
 
 ### Closed
 

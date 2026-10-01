@@ -1,5 +1,8 @@
 # SME User Detail — Page Design Proposal
 
+> Changed 2026-09-21 — stale-text pass (telemetry live in 2.0, version ladder, links). Exam-dimension changes follow in [WHAT_CHANGED_2026-09-21.md](./WHAT_CHANGED_2026-09-21.md).
+> Changed 2026-09-21 — exam dimension on users, orders, offers, banners; two BREAKING calls (see [WHAT_CHANGED_2026-09-21.md](./WHAT_CHANGED_2026-09-21.md)).
+
 > ## ⛔ BEFORE YOU WRITE ANY UI CODE — INVOKE THE `frontend-design` SKILL
 > If you are a Claude/coding session building this page, your **first action** is to invoke
 > the **`frontend-design`** skill (`/frontend-design`). Do this **even if no one asked you to**
@@ -89,24 +92,69 @@ The **`supportCode`** belongs here, rendered large and monospaced with a click-t
 what the operator reads back to the user to confirm they're looking at the right account.
 If `supportCode` is `""` (non-UUID id), render nothing at all — never an empty box.
 
+**Add an exam chip next to the name**, driven by `entitlement.activeExamId`. It is the second
+thing an operator needs after "who is this" — it says which product the conversation is about,
+and the quota block below is scoped to it. Render `null` as **"No exam chosen"**, not as UPSC:
+"never picked" and "picked UPSC" are different facts and the agent is the one who has to tell
+them apart.
+
 ⚠️ **Do not derive premium from `status`.** `status: "ACTIVE"` is the *trial* state.
 `entitlement.isPremium` / `entitlement.premiumState` are the authoritative answer.
 
 **Centre — entitlement (the single most-asked question)**
-A clear premium/trial/free state chip driven by `entitlement.premiumState`, with
-`premiumExpiresAt`, `subscriptionSource` (Apple vs Razorpay changes what the operator can even
-do), and — when in trial — `trialEndsAt` + `trialDaysLeft`. Beneath it, `recentOrders[]` (last
-5) as a compact list: status, amount, currency, plan, source, and **`premiumGrantedAt`**.
+
+**Row one: what they HOLD, per exam.** Render `entitlement.entitlements[]` as a row of chips,
+one per exam: `examId` · `status` (`LIVE` / `EXPIRED` / `REVOKED`) · `source` · `expiresAt`.
+This is the answer to "which exams has this user bought?", and it is the only place that
+answers it — see the box below. `expiresAt: null` means **perpetual** (a manual comp), not
+unknown. A `REVOKED` chip with a future `expiresAt` is correct, not contradictory: that is what
+a refund looks like. An `isTrial: true` chip means the row itself is dead but the person-level
+trial still covers that exam.
+**An empty array is a normal state**, not an error: a trial-only user holds no row anywhere.
+Render it as "No purchases — on trial until <`trialEndsAt`>", never as "no access".
+
+**Row two: the person-level state.** A premium/trial/free chip driven by
+`entitlement.premiumState`, with `premiumExpiresAt`, `subscriptionSource` and — when in trial —
+`trialEndsAt` + `trialDaysLeft`. Label this row **"account-wide"**, because that is what it is:
+`isPremium` is true if *any* exam is live, and `subscriptionSource` names the gateway of the
+**longest-lived** row, so for a user with Apple in one exam and Razorpay in another it names
+the wrong till. **Never branch a management CTA on `subscriptionSource`** — branch on the
+`source` of the specific `entitlements[]` row the operator is acting on.
+
+Beneath both, `recentOrders[]` (last
+5) as a compact list: status, amount, currency, plan, source, **`examId`**, and
+**`premiumGrantedAt`**.
 `premiumGrantedAt: null` on a `PAID` order is the exact signature of "paid but not activated" —
-make it visually loud, because that is the complaint that brought them here.
+make it visually loud, because that is the complaint that brought them here. **`examId: null`
+on such an order is a different problem with a different fix**: it is an Apple product with no
+`exam_plans` row, and it must not be granted until the plan is seeded (`SME_PORTAL_API.md`
+§2.3, `reconcileHint: UNRESOLVED_EXAM`). Two null-shaped signals, two distinct treatments.
 Amounts are already in major units. **Do not divide by 100.**
+
+> ### 🔑 "Which exams has this user bought?" — from `entitlements[]`, nothing else
+>
+> - ❌ **Not `activeExamId`** — that is the exam they *study*. Studying UPSC while holding
+>   APPSC is an ordinary state.
+> - ❌ **Not `isPremium` / `premiumState`** — person-level, true for *any* live exam.
+> - ❌ **Not "SUBSCRIBED means they have everything"** — that stopped being true when exams
+>   started being sold independently, and believing it is what made a bare revoke destroy a
+>   second exam's subscription.
+>
+> This matters most on the **revoke** control: `DELETE /sme/users/:id/premium` now **requires**
+> `?exam=` (400 otherwise). Build that picker from `entitlements[]`, offer `all` as an explicit,
+> separately-confirmed choice, and say out loud in the confirm dialog that revoking one exam
+> leaves a user who still holds another legitimately `SUBSCRIBED`.
 
 **Right — today's state**
 - **Quota** — `quota.features` rendered generically off each entry's `type`
   (`daily`/`lifetime` show `used`/`limit`/`remaining`; `premium_only` shows a lock;
-  `unlimited` shows "unlimited"). Label the block **"Today (IST)"** and say
+  `unlimited` shows "unlimited"). Label the block **"Today (IST) · <`quota.examId`>"** — caps
+  and the premium exemption are both per exam, so an unlabelled panel is a number nobody can
+  act on, and before 2026-09-21 it silently reported UPSC's allowance for every user. Say
   *"resets at midnight IST — no history is kept"*. Never draw a trend line; there is no series
-  to draw. When `available: false`, show the `unavailableReason` in place of the numbers.
+  to draw. When `available: false`, show the `unavailableReason` in place of the numbers —
+  **`quota.examId` is still present on that path** and should still be shown, because "which
+  exam did we fail to read" is part of the diagnosis.
 - **Streak** — `currentStreak` / `maxStreak` / `lastActiveDate`. When `available: false`,
   render **"Streak unavailable"** plus the reason. **Never a zero.** "0-day streak" and "we
   couldn't read the graph DB" are different sentences to an operator, and only one of them is
@@ -160,10 +208,16 @@ component and reuse it here. When `failureCount > samples.length`, say "showing 
 That shared component is a design constraint worth honouring; it keeps the two panels reading
 as one system.
 
-Give the operator two controls and no more:
+Give the operator three controls and no more:
 - **Sensitivity** — `gapMinutes` (default 5, max 60). Frame it in plain words
   ("group failures within 5 minutes"), not as a raw parameter.
 - **Window** — shared with the timeline (see below); do not give incidents its own date picker.
+- **Exam** — `?exam=<slug>`, optional, default off. Label it honestly, because it does two
+  surprising things: it narrows **only the `api_usage` half** (`auth_events` failures happen
+  before any exam is resolved and are never filtered, which is deliberate — they are usually
+  the cause), and while it is set it **excludes `api_usage` rows with no exam**, i.e. every
+  request captured before 2026-09-21. A filtered feed is therefore shorter than the truth on
+  older windows. Say so next to the control; an unknown slug is a 400, not an empty feed.
 
 **Honesty requirements**
 - `meta.rowCapHit: true` → at least one source hit its own `meta.perSourceRowCap` (250 each
@@ -234,6 +288,11 @@ invalidates the cursor position, so changing a filter must reset to page 1. `nex
   it after every response.
 
 **Content-specific honesty, on the rows themselves:**
+- **`exam` is on every item and `null` on most of them.** Only `orders`, `api_usage` and
+  `feedback_reports` record one; everything else genuinely has none, and history predating
+  those columns is `null` too and is **not** backfilled. Render `null` as "—", never as UPSC,
+  and do **not** offer a client-side "filter timeline to one exam" control: it would silently
+  drop the entire pre-2026-09-21 tail and read as "nothing happened".
 - **Chat.** A `chat_conversation_started` event proves a conversation happened and carries
   `metadata.conversationId` + `metadata.feature`. **It carries no messages.** Label the row
   "AI conversation started" with a copyable Dify conversation id — never "chat transcript",
@@ -328,18 +387,23 @@ this page misleads someone.
 
 ---
 
-## What will be empty on day one — plan for it
+## What may be empty — plan for it
 
 Say this in the UI, not just in this doc. An operator who sees an empty panel and assumes
 "nothing happened" will give a user the wrong answer.
 
+The client-emitted signals below are **live**: app **2.0** (Android 27, iOS 2.0 build 3) went to
+both stores on **2026-09-17** and emits all of them. They are still often empty per user, because
+a device on any older build emits nothing and never will — so coverage grows with 2.0 adoption,
+and "empty" usually means *this user has not updated*.
+
 | Panel / field | Why it may be empty | What to render |
 |---|---|---|
-| Purchase-funnel events (`paywall_viewed`, `upgrade_tapped`, `checkout_opened`, `checkout_abandoned`, `purchase_failed`) | Emitted by app code **not in any shipped build yet** | "Ships with the next app release" — not "no activity" |
+| Purchase-funnel events (`paywall_viewed`, `upgrade_tapped`, `checkout_opened`, `checkout_abandoned`, `purchase_failed`) | Emitted by app 2.0 (2026-09-17); this user may still be on an older build | "No funnel activity — this device is on an older build" if `appVersion` < 2.0, else "no activity" |
 | `client_error` rows / their incidents | Same | Same |
 | `app_opened` / `app_backgrounded` | Same | Same |
-| `pushTokens[].permissionGranted` | `null` until the next release; older tokens stay `null` forever | "Unknown (older app build)" — **not** "denied" |
-| `chat_conversation_started` | Requires the app to send `conversationId` on a **successful** `/quota/finalize` for a **chat** feature — next release | "No AI conversations recorded" + the note that content lives in Dify regardless |
+| `pushTokens[].permissionGranted` | Populated by app 2.0; tokens from older builds stay `null` forever | "Unknown (older app build)" — **not** "denied" |
+| `chat_conversation_started` | Requires the app to send `conversationId` on a **successful** `/quota/finalize` for a **chat** feature, which app 2.0 does and older builds do not | "No AI conversations recorded" + the note that content lives in Dify regardless |
 | `api_usage` older than ~30 days | Nightly purge; and nothing at all before the interceptor's deploy date | "Request tracking started on <date>" |
 | `auth_events` older than 90 days | Nightly purge | State the retention rather than showing a blank tail |
 | Quota for any day but today | Redis TTL at midnight IST — genuinely deleted | "Today only — quota history is not retained" |
@@ -357,18 +421,22 @@ in a tooltip, an expanded detail row, or a hover title — but it must be reacha
 silently drop a field because it "didn't fit". Tick each box.
 
 - [ ] **snapshot.user** → `id` · `supportCode` · `email` · `name` · `phoneNumber` · `phoneVerified` · `status` · `provider` · `createdAt`
-- [ ] **snapshot.entitlement** → `isPremium` · `premiumState` · `premiumExpiresAt` · `subscriptionSource` · `trialEndsAt` · `trialDaysLeft`; `recentOrders[]`: `id` · `status` · `amount` · `currency` · `planType` · `paymentSource` · `premiumGrantedAt` · `createdAt`
-- [ ] **snapshot.quota** → `available` · `scope` · `istDate` · `resetsAtISTMidnight` · `premium` · `features` (all keys, generically by `type`) · `unavailableReason`
+- [ ] **snapshot.entitlement** → `activeExamId` (nullable — "No exam chosen", never UPSC) · `entitlements[]`: `examId` · `accessTier` · `status` · `source` · `expiresAt` (null = perpetual) · `isTrial` · `trialEndsAt` — **and the empty array rendered as a trial state, not "no access"**; `isPremium` · `premiumState` · `premiumExpiresAt` · `subscriptionSource` · `trialEndsAt` · `trialDaysLeft`; `recentOrders[]`: `id` · `status` · `amount` · `currency` · `planType` · `paymentSource` · `examId` (nullable) · `premiumGrantedAt` · `createdAt`
+- [ ] **snapshot.quota** → `available` · `scope` · `examId` (shown even when `available: false`) · `istDate` · `resetsAtISTMidnight` · `premium` · `features` (all keys, generically by `type`) · `unavailableReason`
 - [ ] **snapshot.streak** → `available` · `currentStreak` · `maxStreak` · `lastActiveDate` · `unavailableReason`
 - [ ] **snapshot.activity** → `windowDays` · `from` · `to` · `total` · every key of `counts` · `retention` (4 fields)
 - [ ] **snapshot.lastSeen** → `lastLoginAt` · `lastActiveAt` · `lastSessionAt` · `lastRequestAt` · `lastRequestRoute` · `lastClientEventAt` · `lastClientEventType`
 - [ ] **snapshot.clients** → `appVersions[]`: `appVersion` · `platform` · `lastSeenAt`; `distinctDeviceCount` · `deviceCountCapped`; `pushTokens[]`: `platform` · `isActive` · `permissionGranted` (3-state) · `lastUsedAt`
-- [ ] **timeline.items[]** → `id` · `rowId` · `source` · `type` · `at` · `title` · `severity` · `data` (every key, per source — see the source table in the API doc)
+- [ ] **timeline.items[]** → `id` · `rowId` · `source` · `type` · `at` · `title` · `severity` · `exam` (null on most sources **and** on pre-2026-09-21 history — render "—") · `data` (every key, per source — see the source table in the API doc)
 - [ ] **timeline.meta** → `sources` · `limit` · `limitClamped` · `rowsFetched` · `rowCap` · `from` · `to` · `windowDays` · `retention`; plus `nextCursor` / `hasMore` driving pagination
 - [ ] **incidents[]** → `id` · `oldestRowId` · `startedAt` · `endedAt` · `startedAtIST` · `istDate` · `failureCount` · `severity` · `title` · `sources` · `byLabel[]` · `byStatus[]` · `samples[]` (max 5)
 - [ ] **incidents.meta** → `limit` · `gapMinutes` · `rowsScanned` · `rowCap` · `perSourceRowCap` · `rowCapHit` · `truncatedSources` · `from` · `to` · `windowDays` · `retention`; plus `nextCursor` / `hasMore`
 - [ ] **note (201)** → `id` · `action` · `targetUserId` · `note` · `category` · `author` · `createdAt`
-- [ ] **support-code lookup** → `id` · `supportCode` · `email` · `name` · `phoneNumber` · `status` · `isPremium` · `premiumState` · `createdAt`
+- [ ] **support-code lookup** → `id` · `supportCode` · `email` · `name` · `phoneNumber` · `status` · `isPremium` · `premiumState` (now resolved with that exam's trial length) · `activeExamId` (nullable) · `createdAt`
+- [ ] **Answer sheet check:** "which exams has this user bought?" is answered on screen from
+      `entitlements[]` only — never from `activeExamId`, `isPremium` or `subscriptionSource`
+- [ ] **Revoke control** sends `?exam=` (picker from `entitlements[]`, `all` separately
+      confirmed) — the bare call is a 400
 
 The Swagger group **SME** at `/api/docs` is the live field list — diff against it before
 calling the page complete.
@@ -384,5 +452,5 @@ calling the page complete.
 - Group by **IST** days; never by the UTC date of `at`.
 - Use the server's `title` strings; don't reimplement 17 formatters.
 - The timeline proves a chat happened. It does not show what was said.
-- Empty panels for mobile-emitted signals are **expected until the next app release** — say so
-  on screen.
+- Mobile-emitted signals ship in app **2.0** (2026-09-17). An empty panel usually means **this
+  user has not updated**, not that nothing happened — say which one it is on screen.

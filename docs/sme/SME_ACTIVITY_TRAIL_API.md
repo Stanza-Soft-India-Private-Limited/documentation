@@ -1,5 +1,8 @@
 # SME — User Activity Trail API
 
+> Changed 2026-09-21 — stale-text pass (telemetry live in 2.0, version ladder, links). Exam-dimension changes follow in [WHAT_CHANGED_2026-09-21.md](./WHAT_CHANGED_2026-09-21.md).
+> Changed 2026-09-21 — exam dimension on users, orders, offers, banners; two BREAKING calls (see [WHAT_CHANGED_2026-09-21.md](./WHAT_CHANGED_2026-09-21.md)).
+
 > ## ⛔ BEFORE YOU WRITE ANY UI CODE — INVOKE THE `frontend-design` SKILL
 > If you are a Claude/coding session building anything on top of these endpoints, your
 > **first action** is to invoke the **`frontend-design`** skill (`/frontend-design`). Do
@@ -177,14 +180,16 @@ or a missing node degrades to `available: false` + `unavailableReason` rather th
 whole snapshot. **`available: false` must never render as "0-day streak"** — it means "we
 couldn't read it", which is a different sentence to a support agent.
 
-**5. The mobile-emitted signals produce NOTHING until the next app release ships and users update.**
+**5. The mobile-emitted signals are LIVE as of app 2.0, but only from devices that have updated.**
 `client_error`, `paywall_viewed`, `upgrade_tapped`, `checkout_opened`, `checkout_abandoned`,
-`purchase_failed`, `app_opened`, `app_backgrounded`, and `permissionGranted` on push tokens
-are all emitted by app code that is **not in any released build at the time of writing**. The
-backend accepts them today; nothing sends them yet. Those panels will be empty, and empty is
-correct. The UI must distinguish **"no data yet — this ships with the next app release"** from
-**"nothing happened"**. Same for `permissionGranted: null`, which means *the client build
-predates the field* — it does **not** mean permission was denied.
+`purchase_failed`, `chat_conversation_started`, `app_opened`, `app_backgrounded`, and
+`permissionGranted` on push tokens are all emitted by **app 2.0, released to both stores on
+2026-09-17** (Android 27, iOS 2.0 build 3). Older builds emit none of them and never will, so
+volume on these panels grows with adoption rather than arriving all at once. A thin panel is
+therefore a *coverage* statement, not a "nothing happened" statement, and the UI must still
+distinguish **"this user is on an older build"** from **"nothing happened"**. Same for
+`permissionGranted: null`, which means *the client build predates the field* — it does **not**
+mean permission was denied.
 
 **6. `api_usage` skips some traffic by design.**
 Only **authenticated** requests are captured (`request.user.id` must exist), and the routes
@@ -219,91 +224,148 @@ field rather than the request.
 
 **Response 200** (raw — this whole object is the body)
 
+<!-- captured from staging 2026-09-21, backend f6329e6 -->
+`GET /sme/users/0d2f8b41-9a3c-4f2e-8c71-2b6d5a1e7f30/snapshot` — verbatim, nothing
+elided:
+
 ```json
 {
   "user": {
     "id": "0d2f8b41-9a3c-4f2e-8c71-2b6d5a1e7f30",
     "supportCode": "1MQR-PGCT",
     "email": "aspirant@example.com",
-    "name": "Meghana R.",
-    "phoneNumber": "+919876543210",
+    "name": "A. Sharma",
+    "phoneNumber": "+91XXXXXXXXXX",
     "phoneVerified": true,
     "status": "SUBSCRIBED",
-    "provider": "cognito",
-    "createdAt": "2026-03-02T06:11:04.000Z"
+    "provider": "google",
+    "createdAt": "2026-09-09T11:49:43.440Z"
   },
   "entitlement": {
+    "activeExamId": "appsc-group-1",
+    "entitlements": [
+      {
+        "examId": "appsc-group-1",
+        "accessTier": "paid",
+        "status": "LIVE",
+        "source": "RAZORPAY",
+        "expiresAt": "2026-10-16T12:09:32.616Z",
+        "isTrial": false,
+        "trialEndsAt": null
+      }
+    ],
     "isPremium": true,
     "premiumState": "Premium",
-    "premiumExpiresAt": "2027-03-02T06:11:04.000Z",
-    "subscriptionSource": "APPLE",
+    "premiumExpiresAt": "2026-10-16T12:09:32.616Z",
+    "subscriptionSource": "RAZORPAY",
     "trialEndsAt": null,
     "trialDaysLeft": null,
     "recentOrders": [
       {
-        "id": "ord_7f3a…",
+        "id": "5b71d908-3c42-4f6b-a087-13e9d5c82b64",
         "status": "PAID",
-        "amount": 4999,
+        "amount": 499,
         "currency": "INR",
-        "planType": "ANNUAL",
+        "planType": "MONTHLY",
         "paymentSource": "RAZORPAY",
-        "premiumGrantedAt": "2026-06-16T11:02:41.000Z",
-        "createdAt": "2026-06-16T11:02:10.000Z"
+        "examId": "appsc-group-1",
+        "premiumGrantedAt": "2026-09-16T12:09:32.623Z",
+        "createdAt": "2026-09-16T12:09:32.607Z"
       }
     ]
   },
   "quota": {
     "available": true,
     "scope": "today_only",
-    "istDate": "2026-07-23",
+    "examId": "appsc-group-1",
+    "istDate": "2026-09-21",
     "resetsAtISTMidnight": true,
     "premium": true,
-    "features": { "chat_mentor": { "unlimited": true, "type": "daily" } },
+    "features": {
+      "chat_mentor":      { "unlimited": true, "type": "daily", "resetsAt": "2026-09-21T18:30:00.000Z" },
+      "chat_sme":         { "unlimited": true, "type": "daily", "resetsAt": "2026-09-21T18:30:00.000Z" },
+      "chat":             { "unlimited": true, "type": "daily", "resetsAt": "2026-09-21T18:30:00.000Z" },
+      "flashcard":        { "unlimited": true, "type": "daily", "resetsAt": "2026-09-21T18:30:00.000Z" },
+      "mnemonic":         { "unlimited": true, "type": "daily", "resetsAt": "2026-09-21T18:30:00.000Z" },
+      "mains_eval":       { "unlimited": true, "type": "daily", "resetsAt": "2026-09-21T18:30:00.000Z" },
+      "pyq_reveal":       { "unlimited": true, "type": "daily", "resetsAt": "2026-09-21T18:30:00.000Z" },
+      "pyq_mains_reveal": { "unlimited": true, "type": "daily", "resetsAt": "2026-09-21T18:30:00.000Z" },
+      "content_doc":      { "unlimited": true, "type": "lifetime_per_subject" },
+      "pyq_variation":    { "unlimited": true, "type": "premium_only" }
+    },
     "unavailableReason": null
   },
   "streak": {
-    "available": true,
-    "currentStreak": 12,
-    "maxStreak": 31,
-    "lastActiveDate": "2026-07-23",
-    "unavailableReason": null
+    "available": false,
+    "currentStreak": null,
+    "maxStreak": null,
+    "lastActiveDate": null,
+    "unavailableReason": "Neo4j is unavailable (driver not initialised)"
   },
   "activity": {
     "windowDays": 30,
-    "from": "2026-06-23T09:14:22.000Z",
-    "to": "2026-07-23T09:14:22.000Z",
+    "from": "2026-08-22T14:37:53.831Z",
+    "to": "2026-09-21T14:37:53.831Z",
     "counts": {
-      "auth_events": 4, "api_usage": 812, "orders": 1, "refunds": 0,
-      "payment_events": 3, "user_question_attempts": 140,
-      "simulation_attempts": 2, "user_document_progress": 9,
-      "custom_tasks": 6, "user_content": 11,
-      "psychometric_test_results": 1, "notification_history": 22,
-      "sme_audit_log": 2, "feedback_reports": 1,
-      "survey_responses": 0, "chat_message_feedback": 3
+      "auth_events": 116, "api_usage": 3528, "orders": 1, "refunds": 0,
+      "payment_events": 0, "user_question_attempts": 0,
+      "simulation_attempts": 1, "user_document_progress": 0,
+      "custom_tasks": 0, "user_content": 2,
+      "psychometric_test_results": 0, "notification_history": 3,
+      "sme_audit_log": 0, "feedback_reports": 0,
+      "survey_responses": 0, "chat_message_feedback": 0
     },
-    "total": 1017
+    "total": 3651,
+    "retention": {
+      "apiUsageRawRetentionDays": 30,
+      "apiUsageCompleteFrom": "2026-08-22T14:37:53.831Z",
+      "windowExceedsApiUsageRetention": false,
+      "note": null
+    }
   },
   "lastSeen": {
-    "lastLoginAt": "2026-07-23T04:02:00.000Z",
-    "lastActiveAt": "2026-07-23T08:55:12.000Z",
-    "lastSessionAt": "2026-07-23T08:55:10.000Z",
-    "lastRequestAt": "2026-07-23T08:55:12.000Z",
-    "lastRequestRoute": "GET /api/v1/tasks/today",
-    "lastClientEventAt": "2026-07-23T04:01:58.000Z",
-    "lastClientEventType": "login_success"
+    "lastLoginAt": "2026-09-16T16:29:40.735Z",
+    "lastActiveAt": null,
+    "lastSessionAt": "2026-09-21T14:32:47.904Z",
+    "lastRequestAt": "2026-09-21T14:32:49.947Z",
+    "lastRequestRoute": "GET /api/v1/pyq/weak-topics",
+    "lastClientEventAt": "2026-09-16T17:15:30.056Z",
+    "lastClientEventType": "app_opened"
   },
   "clients": {
     "appVersions": [
-      { "appVersion": "1.7.0", "platform": "ios", "lastSeenAt": "2026-07-23T08:55:12.000Z" }
+      { "appVersion": null,   "platform": null,      "lastSeenAt": "2026-09-21T14:32:49.947Z" },
+      { "appVersion": "2.0",  "platform": "ios",     "lastSeenAt": "2026-09-16T17:15:32.500Z" },
+      { "appVersion": "2.0",  "platform": "android", "lastSeenAt": "2026-09-16T15:10:25.668Z" },
+      { "appVersion": "1.10", "platform": "android", "lastSeenAt": "2026-09-16T14:53:56.280Z" },
+      { "appVersion": "1.9",  "platform": "android", "lastSeenAt": "2026-09-16T14:50:46.264Z" },
+      { "appVersion": "1.9",  "platform": "ios",     "lastSeenAt": "2026-09-10T08:34:29.894Z" }
     ],
-    "distinctDeviceCount": 2,
+    "distinctDeviceCount": 3,
     "deviceCountCapped": false,
     "pushTokens": [
-      { "platform": "ios", "isActive": true, "permissionGranted": null, "lastUsedAt": "2026-07-22T18:30:00.000Z" }
+      { "platform": "ios",     "isActive": true, "permissionGranted": true, "lastUsedAt": "2026-09-16T16:29:46.000Z" },
+      { "platform": "android", "isActive": true, "permissionGranted": true, "lastUsedAt": "2026-09-16T15:10:19.334Z" }
     ]
   }
 }
 ```
+
+**Three things in that capture the portal must handle, and they are easy to miss in a
+hand-written mock:**
+
+1. **`streak.available: false` with a populated `unavailableReason`.** Staging's Neo4j is
+   unreachable, and this is exactly the degraded shape the endpoint is designed to
+   return: `currentStreak` / `maxStreak` / `lastActiveDate` all `null`, and a string
+   saying why. **Render the reason, not a zero.** "Streak unavailable" and "streak is 0"
+   are different answers to a support ticket. The same contract holds in production for
+   any transient Neo4j outage.
+2. **`clients.appVersions[0]` has `appVersion: null` and `platform: null`.** That is the
+   bucket for requests that arrived without version headers (server-side / older
+   clients). It sorts first because it is the most recent `lastSeenAt`. Filter nulls out
+   of a "which app version are they on?" readout, or the answer is blank.
+3. **`lastActiveAt` is `null` while `lastRequestAt` is minutes old.** They come from
+   different sources (see the field table) and do not degrade together.
 
 **Field meanings**
 
@@ -311,9 +373,14 @@ field rather than the request.
 |---|---|
 | `user.supportCode` | The code the user reads aloud (see §5). Derived, never stored. Empty string `""` if the id isn't a UUID — render nothing, not `""`. |
 | `user.status` | Postgres lifecycle: `ACTIVE`, `SUBSCRIBED`, `INACTIVE`, `SUSPENDED`, `LOCKED`, `ONBOARDING`. **Never use `status === "ACTIVE"` as a premium signal** — that's the trial state. |
+| `entitlement.activeExamId` | **Who this person is** — `user_profiles.active_exam_id`. **Nullable:** `null` means they have never picked an exam, and it is deliberately *not* coerced to `upsc-cse`, because "never chose" and "chose UPSC" are different facts and the support agent is the one who needs to tell them apart. **Never answer "which exams did they buy?" from this field.** |
+| `entitlement.entitlements[]` | **What this person holds** — one entry per `user_exam_entitlements` row, from the same builder that powers `GET /sme/users` and `GET /sme/users/:id`, so a list row and this header can never disagree. Fields: `examId`, `accessTier` (`free` \| `paid`, the exam's tier at read time), `status` (`LIVE` \| `EXPIRED` \| `REVOKED` — **REVOKED beats an expiry still in the future**, which is exactly what a refund or an SME revoke means), `source` (`APPLE` \| `RAZORPAY` \| `MANUAL`, **per row** — not the person-level `subscriptionSource`), `expiresAt` (`null` = perpetual, not unknown), `isTrial`, `trialEndsAt`. **Empty array for a trial-only user** — a trial creates no row, and `premiumState`/`trialEndsAt` are what describe them. |
+| `entitlement.entitlements[].isTrial` | "The row has stopped granting anything, but the person-level trial still covers this exam" — evaluated with **this exam's** trial length. Never true alongside `status: "LIVE"`, or every live subscriber would also read as on trial. |
 | `entitlement.isPremium` / `premiumState` | Computed by the shared `premium-check.util` (PostgreSQL `status` + `premiumExpiresAt` + `createdAt` + `trialEndsAt`). This is the authoritative entitlement answer. **`premiumState` is a closed set of five human-readable labels, title-cased, one with a space: `Premium` · `Trial` · `Trial Ended` · `Churned` · `Downloaded`.** It is *not* SCREAMING_CASE and it is *not* the same vocabulary as the Wylto CRM statuses — the two were deliberately decoupled so a marketing rename cannot change this response. Match on the exact strings above. |
 | `entitlement.trialEndsAt` / `trialDaysLeft` | Non-null **only** while the user is actually inside a trial (`status === 'ACTIVE'` and now < trial end). `trialDaysLeft` is ceil'd days. |
 | `entitlement.recentOrders[]` | Last **5** orders, newest first. `amount` is **converted to major units** (rupees/dollars) — the DB stores paise/cents, this endpoint already divided by 100. Don't divide again. |
+| `entitlement.recentOrders[].examId` | Which exam the money bought. **Nullable** — Apple's payloads carry no exam, so an order whose signed product matched no `exam_plans` row is recorded unresolved rather than guessed. Those are the `UNRESOLVED_EXAM` reconcile cases (`SME_PORTAL_API.md` §2.3). |
+| `quota.examId` | **Which exam these quota numbers are for** — the user's `activeExamId`, or `upsc-cse` when unset. Caps come from that exam's `feature_caps` and the exemption from that exam's entitlement, so an unlabelled quota panel is a number nobody can act on. Present **even when `available: false`** — "which exam did we fail to read" is part of the diagnosis. Before 2026-09-21 this panel always reported UPSC's allowance, whoever you were looking at. |
 | `quota.*` | See limitation 3. `features` is `Record<featureKey, …>` whose value shape varies by cap type: `{ unlimited: true, type }` for premium; `{ used, limit, remaining, type: 'daily' \| 'lifetime' }`, `{ type: 'lifetime_per_subject', limit, perSubject: true }`, or `{ type: 'premium_only' }` for free. Render generically off `type`. |
 | `streak.*` | See limitation 4. `lastActiveDate` is a Neo4j-supplied `YYYY-MM-DD` string. |
 | `activity.retention` | Same object as the timeline's `meta.retention` (limitation 1) — the `api_usage` count is the one that goes quiet past 30 days. |
@@ -382,39 +449,78 @@ render `meta.from`/`meta.to`, not the values you sent. `from` after `to` → **4
 
 **Response 200**
 
+<!-- captured from staging 2026-09-21, backend f6329e6 -->
+`GET /sme/users/0d2f8b41-9a3c-4f2e-8c71-2b6d5a1e7f30/timeline?limit=2&sources=api_usage,orders`
+— verbatim, both items shown (`limit=2`; a default call returns 50 of the same shape):
+
 ```json
 {
   "items": [
     {
-      "id": "api_usage:c1f0…",
-      "rowId": "c1f0…",
+      "id": "api_usage:88888888-8888-4888-8888-888888888888",
+      "rowId": "88888888-8888-4888-8888-888888888888",
       "source": "api_usage",
-      "type": "POST /api/v1/quota/begin [chat_mentor]",
-      "at": "2026-07-23T08:55:12.000Z",
-      "title": "POST /api/v1/quota/begin [chat_mentor] → 200 (41ms)",
+      "type": "GET /api/v1/content-doc",
+      "at": "2026-09-21T14:32:49.947Z",
+      "title": "GET /api/v1/content-doc → 200 (6ms)",
       "severity": "info",
+      "exam": "upsc-cse",
       "data": {
-        "method": "POST", "route": "/api/v1/quota/begin", "status": 200,
-        "durationMs": 41, "feature": "chat_mentor",
-        "appVersion": "1.7.0", "platform": "ios", "deviceId": "6f2c…"
+        "method": "GET", "route": "/api/v1/content-doc", "status": 200,
+        "durationMs": 6, "feature": null,
+        "appVersion": null, "platform": null, "deviceId": null
+      }
+    },
+    {
+      "id": "api_usage:99999999-9999-4999-8999-999999999999",
+      "rowId": "99999999-9999-4999-8999-999999999999",
+      "source": "api_usage",
+      "type": "GET /api/v1/notifications/unread-count",
+      "at": "2026-09-21T14:32:49.947Z",
+      "title": "GET /api/v1/notifications/unread-count → 200 (6ms)",
+      "severity": "info",
+      "exam": "upsc-cse",
+      "data": {
+        "method": "GET", "route": "/api/v1/notifications/unread-count", "status": 200,
+        "durationMs": 6, "feature": null,
+        "appVersion": null, "platform": null, "deviceId": null
       }
     }
   ],
-  "nextCursor": "MjAyNi0wNy0yM1QwODo1NToxMi4wMDBafGMxZjA",
+  "nextCursor": "MjAyNi0wOS0yMVQxNDozMjo0OS45NDdafDk5OTk5OTk5LTk5OTktNDk5OS04OTk5LTk5OTk5OTk5OTk5OQ",
   "hasMore": true,
   "meta": {
-    "sources": ["auth_events", "api_usage", "…"],
-    "limit": 50,
+    "sources": ["api_usage", "orders"],
+    "limit": 2,
     "limitClamped": false,
-    "rowsFetched": 634,
+    "rowsFetched": 4,
     "rowCap": 2000,
-    "from": "2026-06-23T09:14:22.000Z",
-    "to": "2026-07-23T09:14:22.000Z",
+    "from": "2026-08-22T14:44:33.737Z",
+    "to": "2026-09-21T14:44:33.737Z",
     "windowDays": 30,
-    "retention": { "…": "see limitation 1" }
+    "retention": {
+      "apiUsageRawRetentionDays": 30,
+      "apiUsageCompleteFrom": "2026-08-22T14:44:33.737Z",
+      "windowExceedsApiUsageRetention": false,
+      "note": null
+    }
   }
 }
 ```
+
+> 🔴 **Read the `exam` field on those two items: `"upsc-cse"`, for a user whose
+> `activeExamId` is `appsc-group-1`.** That is not a bug and it is not the user's exam —
+> `api_usage.exam_id` records **`req.exam` as resolved at request time**, and a client
+> that sends no `X-Exam` header resolves to the default, `upsc-cse` (the "absence =
+> UPSC" rule; these two rows came from a caller with no version headers at all, hence
+> `appVersion`/`platform`/`deviceId` all `null`).
+>
+> **So never present a timeline `exam` as "the exam the user was studying".** It is "the
+> exam dimension the request was served under". `orders` is the only source whose `exam`
+> is a durable business fact.
+>
+> Note also **two items with the identical `at`** — the cursor's tiebreaker is `rowId`,
+> which is why `nextCursor` encodes both. Do not de-duplicate on timestamp.
 
 **Item fields**
 
@@ -427,6 +533,7 @@ render `meta.from`/`meta.to`, not the values you sent. `from` after `to` → **4
 | `at` | Event timestamp (UTC ISO). Whichever column that source is ordered by — see the table. |
 | `title` | A pre-rendered, human-readable one-liner. **Use it.** It is built server-side per source, so the portal doesn't reimplement 17 formatters. |
 | `severity` | `info` \| `warn` \| `error`. Drives colour only. `api_usage`: ≥500 → `error`, 400–499 → `warn`, else `info`. `auth_events`: `error` for the failure types listed in §3. Orders `FAILED` → `error`, `CANCELLED` → `warn`. Payments `FAILED` → `error`, `REFUNDED` → `warn`. Refunds always `warn`. Feedback `ISSUE` → `warn`, chat feedback `DOWN` → `warn`. |
+| `exam` | **Present on every item, `null` on most of them.** Only three sources record an exam: `orders` (`orders.exam_id` — what was bought), `api_usage` (`api_usage.exam_id` — the `req.exam` resolved at request time) and `feedback_reports` (`feedback_reports.exam_id` — where it was filed from). Every other source is genuinely exam-less. ⚠️ It is **also `null` on history predating those columns**, which is *not* backfilled: guessing an exam for a row captured before the column existed would be indistinguishable from data. So render `null` as "—", never as "UPSC", and never filter a timeline down to one exam client-side — you would silently drop the whole pre-2026-09-21 tail. |
 | `data` | Source-specific structured payload for the expanded/detail view. Keys are listed per source below. Values may be `null`. |
 
 **Sources and their `data` keys**
@@ -541,6 +648,22 @@ of scrolling a timeline.
 | `limit` | int as string | `20` | `50` | Incidents (clusters) per page. |
 | `gapMinutes` | int as string | `5` | `60` | Max quiet gap between consecutive failures inside one incident. Widen it to merge a flappy session into one story; narrow it to split. |
 | `cursor` | opaque | — | — | `nextCursor` from the previous page. |
+| `exam` | slug | — | — | **Narrows the `api_usage` half only.** See the box below. **400 on an unknown slug**, not an empty feed. |
+
+> ### `?exam=` filters half the feed, on purpose
+>
+> Only `api_usage` carries an exam. **`auth_events` failures are never filtered** — a sign-in
+> failure happens *before* any exam is resolved, so there is nothing to filter on, and hiding
+> them would remove exactly the login failures that explain the session an agent is looking at.
+> Expect a filtered feed to still contain auth failures; that is correct, not a leak.
+>
+> ⚠️ **While `exam` is set, `api_usage` rows with a NULL `exam_id` are EXCLUDED** — that is
+> every request captured before the column existed. So a filtered incident feed is *shorter
+> than the truth* for any window reaching back before 2026-09-21. Label the filter with that,
+> or an agent will read "no incidents in APPSC" off a window that simply predates the column.
+>
+> Every `sample` inside an incident carries the timeline's `exam` field (`null` where the
+> source records none).
 
 Up to **250 rows per source / 500 total** are scanned per page before clustering.
 
@@ -655,7 +778,7 @@ differently from a blank panel, and the operator is about to say it out loud to 
 **Request**
 
 ```json
-{ "note": "Called back — Razorpay double-charge, refund raised #RF2291", "category": "refund", "author": "priya@stanzasoft.com" }
+{ "note": "Called back — Razorpay double-charge, refund raised #RF2291", "category": "refund", "author": "sme-agent@example.com" }
 ```
 
 | Field | Required | Constraint | Stored as |
@@ -681,7 +804,7 @@ present `author` as an attested identity in the UI.
   "targetUserId": "0d2f8b41-…",
   "note": "Called back — Razorpay double-charge, refund raised #RF2291",
   "category": "refund",
-  "author": "priya@stanzasoft.com",
+  "author": "sme-agent@example.com",
   "createdAt": "2026-07-23T09:20:44.000Z"
 }
 ```
@@ -724,21 +847,40 @@ asking them to spell an email address.
 
 **Response 200**
 
+<!-- captured from staging 2026-09-21, backend f6329e6 -->
+`GET /sme/users/by-support-code/1MQR-PGCT` — verbatim (that code is the `supportCode`
+the snapshot in §1 returned for the same account, round-tripped):
+
 ```json
 {
   "id": "0d2f8b41-9a3c-4f2e-8c71-2b6d5a1e7f30",
   "supportCode": "1MQR-PGCT",
   "email": "aspirant@example.com",
-  "name": "Meghana R.",
-  "phoneNumber": "+919876543210",
+  "name": "A. Sharma",
+  "phoneNumber": "+91XXXXXXXXXX",
   "status": "SUBSCRIBED",
   "isPremium": true,
   "premiumState": "Premium",
-  "createdAt": "2026-03-02T06:11:04.000Z"
+  "activeExamId": "appsc-group-1",
+  "createdAt": "2026-09-09T11:49:43.440Z"
 }
 ```
 
 Feed `id` straight into §1–§4.
+
+**`activeExamId`** (added 2026-09-21) is the exam this person uses, **nullable** — `null` means
+they have never picked one. It is the first thing to read after the name: it tells the agent
+which product the caller is actually talking about, before any other call.
+
+**`premiumState` now uses that exam's trial length.** This lookup used to leave it at the 14-day
+default, which was only *accidentally* right — 14 is `upsc-cse`'s length. The instant an exam
+ships a different one, the first thing support saw about a caller ("Trial Ended") contradicted
+the snapshot one click later. It now resolves the same per-exam length the users list and the
+snapshot do, so all three agree.
+
+⚠️ **This response does NOT carry `entitlements[]`.** It is an identification call, not an
+entitlement answer. To answer "what has this person bought?", follow `id` into
+`GET /sme/users/:id/snapshot` (§1) or `GET /sme/users/:id`.
 
 **Errors:** `400` unusable code (see decode rules), `404` `No user matches support code …`,
 `409` ambiguous (candidate ids are **not** returned — see the filter limitation at the top).
@@ -797,7 +939,7 @@ Worked example: id `0d2f8b41-9a3c-…` → hex prefix `0d2f8b419a` → `1MQR-PGC
 ### How to use this data
 
 **The question it answers.** "Which account is the person on the phone?" — without asking them
-to spell `priya@stanzasoft.com` letter by letter over a bad line.
+to spell `sme-agent@example.com` letter by letter over a bad line.
 
 **The decision it drives.** Nothing analytical. This is pure navigation, and it is the
 **primary** entry point to the whole surface. Design it that way: a persistent input in the
@@ -808,8 +950,36 @@ input and *no input mask*. The server's decoder is deliberately lenient — veri
 2026-07-23, `54p3 6y4m` (lowercase, space instead of hyphen) resolved to the same account as
 `54P3-6Y4M`. A strict mask would reject codes the server would have happily accepted, which is
 the worst possible failure while a customer is reading digits aloud. Show the resolved
-identity — name, email, `premiumState` — for confirmation *before* navigating, so the operator
-can say "is that Gatij?" rather than silently opening the wrong page.
+identity — name, email, `premiumState`, and now the **exam chip** (`activeExamId`) — for
+confirmation *before* navigating, so the operator can say "is that Gatij, on APPSC?" rather than
+silently opening the wrong page.
+
+> ### 🔑 Answer sheet: "which exams has this user bought?"
+>
+> **Answer it from `entitlements[]` (§1) and nothing else.** Read each row's `examId` where
+> `status === "LIVE"`.
+>
+> - ❌ **Not from `activeExamId`.** That is the exam they *study*, not the one they *bought*.
+>   A user can study UPSC and hold APPSC, and vice versa; the two fields answer different
+>   questions and only one of them is about money.
+> - ❌ **Not from `isPremium` / `premiumState` / `subscriptionSource`.** Those are the
+>   **person-level mirror**: they are true for *any* exam, and `subscriptionSource` names the
+>   gateway of the **longest-lived** row — so for someone with Apple in one exam and Razorpay
+>   in another, it names the wrong till.
+>   ✅ **`isPremium` now honours the exam's own trial length** (fixed in this release) and
+>   therefore agrees with `premiumState` and `entitlements[]`. *Before 2026-09-21* it
+>   resolved an `ACTIVE` user's trial window with a fixed 14 days whatever the exam's
+>   `trialDays` was, so on APPSC Group 1 (0-day trial) a lapsed trialist returned
+>   `isPremium: true` beside `premiumState: "Trial Ended"` and `entitlements: []` — the
+>   pre-fix capture is kept at [`SME_PORTAL_API.md` §1.1](./SME_PORTAL_API.md). It is
+>   still the wrong field for a **per-exam** answer, because it is person-level by
+>   design.
+> - ❌ **Not from "they're SUBSCRIBED so they have everything."** That was true before exams
+>   were sold separately and is now the single most expensive wrong assumption on this surface:
+>   it is what made a bare revoke destroy a second exam's subscription.
+>
+> And the inverse: **`entitlements: []` does not mean "no access"** — a trial-only user holds no
+> row at all. Their access is `premiumState: "Trial"` plus `trialEndsAt`.
 
 **The action that follows.** Navigate. Handle three failures distinctly: `400` = "that isn't a
 valid code, ask them to read it again" (the message names the offending symbol), `404` = "no
@@ -827,7 +997,8 @@ portal team should know how they arrive.
 - **Routes:** `POST /api/v1/diagnostics/events` **and** `POST /api/v1/diagnostics/auth-events` —
   two paths, **one handler, identical semantics**. `events` is the honest name now that the sink
   carries general client events; `auth-events` is kept **forever** because 1.6/1.7 builds already
-  in the field call it and will never be updated.
+  in the field call it and will never be updated. (Current store build is **2.0** — Android 27,
+  iOS 2.0 build 3, released 2026-09-17 — and it calls `events`.)
 - **`@Public()` by design** — the whole point is capturing failures *before* a user is
   authenticated (login/OTP/refresh). Not an `x-api-key` surface.
 - **Responses:** `204` accepted (no body), `429` rate-limited (**silent — no body, nothing
@@ -851,11 +1022,15 @@ types need a constant edit, never a migration):
 
 | Group | Types | Live today? |
 |---|---|---|
-| Auth lifecycle | `login_attempt`, `login_success`, `login_failed`, `otp_send_failed`, `otp_verify_failed`, `refresh_failed`, `forced_logout` | **Yes** — emitted by shipped builds |
-| Client errors | `client_error` | No — next app release |
-| Purchase funnel | `paywall_viewed`, `upgrade_tapped`, `checkout_opened`, `checkout_abandoned`, `purchase_failed` | No — next app release |
-| App lifecycle | `app_opened`, `app_backgrounded` | No — next app release |
-| Chat pointer | `chat_conversation_started` | **Yes** — but written **server-side** by `POST /quota/finalize`, not by the sink, and only when the app sends a `conversationId` (also next release). `metadata = { feature, conversationId }`, conversationId truncated to 128 chars. |
+| Auth lifecycle | `login_attempt`, `login_success`, `login_failed`, `otp_send_failed`, `otp_verify_failed`, `refresh_failed`, `forced_logout` | **Yes.** `otp_send_failed` also has a server-side emitter, so it is the one type with full coverage; the rest are client-emitted and so follow the 2.0 adoption curve below. |
+| Client errors | `client_error` | **Yes** — emitted by app 2.0 (released 2026-09-17); older builds emit nothing |
+| Purchase funnel | `paywall_viewed`, `upgrade_tapped`, `checkout_opened`, `checkout_abandoned`, `purchase_failed` | **Yes** — emitted by app 2.0 (released 2026-09-17); older builds emit nothing |
+| App lifecycle | `app_opened`, `app_backgrounded` | **Yes** — emitted by app 2.0 (released 2026-09-17); older builds emit nothing |
+| Chat pointer | `chat_conversation_started` | **Yes** — but written **server-side** by `POST /quota/finalize`, not by the sink, and only when the app sends a `conversationId`, which app 2.0 does (older builds do not). `metadata = { feature, conversationId }`, conversationId truncated to 128 chars. |
+
+Volume on every client-emitted type grows with **2.0 adoption**, not with time: a device still
+on 1.7/1.8/1.9 contributes nothing and never will. Read a low count as partial coverage of the
+install base, never as "this did not happen".
 
 ---
 
@@ -869,7 +1044,7 @@ this project — verify via `information_schema`, not Prisma's migration state).
 |---|---|
 | `api_usage.feature TEXT` | Sub-route discriminator for `/quota/begin` only. **Populated from the deploy date onward** — older rows are `null` even for chat calls. A `null` feature on a `/quota/begin` row means "before this shipped", not "unknown feature". |
 | `auth_events.metadata JSON` | The per-event payload. `null` on every row written before the deploy. |
-| `device_tokens.permission_granted BOOLEAN` | `null` until the next app release. **Never render `null` as denied.** |
+| `device_tokens.permission_granted BOOLEAN` | Populated by app 2.0 (released 2026-09-17); `null` on tokens from any older build, permanently. **Never render `null` as denied.** |
 | `api_usage(device_id, created_at)` index | Makes device/account-sharing queries viable. |
 | `api_usage(feature, created_at)` index | Feature-level usage queries. |
 | `psychometric_test_results(userId, createdAt)` index | This table previously declared **no indexes at all**, so every per-user read seq-scanned it. |
@@ -902,4 +1077,4 @@ contract is for) · [SME_INSIGHTS_API.md](./SME_INSIGHTS_API.md) (the population
 the same `api_usage` / `auth_events` tables) ·
 [SME_USAGE_ANALYTICS.md](./SME_USAGE_ANALYTICS.md) ·
 [SME_PORTAL_API.md](./SME_PORTAL_API.md) (the `/app-users` roster this page links from) ·
-[WHAT_CHANGED_2026-07-23.md](./WHAT_CHANGED_2026-07-23.md)
+[archive/WHAT_CHANGED_2026-07-23.md](./archive/WHAT_CHANGED_2026-07-23.md) (archived)

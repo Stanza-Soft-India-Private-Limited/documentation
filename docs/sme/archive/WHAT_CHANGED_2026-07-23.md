@@ -1,5 +1,9 @@
 # SME Portal — what changed, 2026-07-23
 
+> **ARCHIVED 2026-09-21 — superseded. Read [`../WHAT_CHANGED_2026-09-21.md`](../WHAT_CHANGED_2026-09-21.md) instead.**
+> Every production number below is **UPSC-only and dated July 2026**, from before the exam dimension existed; do not quote any of them.
+> Its "nothing until the next app release" lines are false: that release is app **2.0**, shipped to both stores on **2026-09-17**.
+
 Everything below is **deployed and live on production** unless a line says otherwise.
 Four documents in this bundle: one correction to a doc you already have, two new
 API surfaces, and one UI proposal.

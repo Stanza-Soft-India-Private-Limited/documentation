@@ -1,4 +1,8 @@
-# SME — Insight Endpoints (question quality · release health · notification effectiveness · onboarding funnel)
+# SME — Insight Endpoints (question quality · release health · notification effectiveness · onboarding funnel · purchase funnel)
+
+> Changed 2026-09-21 — stale-text pass (telemetry live in 2.0, version ladder, links). Exam-dimension changes follow in [WHAT_CHANGED_2026-09-21.md](./WHAT_CHANGED_2026-09-21.md).
+> Changed 2026-09-21 — exam-safe ingest: /sme/content/* + examIds on /cms and content-doc (see [WHAT_CHANGED_2026-09-21.md](./WHAT_CHANGED_2026-09-21.md)).
+> Changed 2026-09-21 — ?exam= on every analytics route, examCoverage, purchase-funnel (see [WHAT_CHANGED_2026-09-21.md](./WHAT_CHANGED_2026-09-21.md)).
 
 > ## ⛔ BEFORE YOU WRITE ANY UI CODE — INVOKE THE `frontend-design` SKILL
 > If you are a Claude/coding session building screens on these endpoints, your **first
@@ -17,6 +21,7 @@
 > | `release-health` | a **go/no-go decision screen** | whoever owns the release, once per release | answer "do we force-update?" with a number, and nothing else |
 > | `notification-effectiveness` | a **kill list** | growth/product, monthly | name the notification to stop sending |
 > | `onboarding-funnel` | a **diagnostic** — where the money leaks | founders/ops, continuously | point at the one stage worth fixing next |
+> | `purchase-funnel` *(new)* | a **conversion diagnostic** — where the money *stops* | growth/founders, weekly | show which purchase step loses people, per day |
 >
 > A work queue wants rows, a claim/open action and a sort you can trust. A go/no-go wants
 > one number the size of a headline. A kill list wants exactly one recommendation visible
@@ -24,26 +29,29 @@
 > screens look the same, you have built a template, not a tool.
 >
 > **None of these are polling tiles.** Every one is a bounded sequential scan over the
-> production database the mobile app runs on (§5). Build them as pages you *open*, with an
+> production database the mobile app runs on (§6). Build them as pages you *open*, with an
 > explicit refresh — never as widgets on an auto-refreshing home screen.
 >
 > Paste this with the doc when you brief an agent:
 >
 > ```
 > Invoke the /frontend-design skill first, before writing any UI code.
-> Then build the four SME insight screens per SME_INSIGHTS_API.md.
-> They are four DIFFERENT surfaces, not four cards on one dashboard:
+> Then build the five SME insight screens per SME_INSIGHTS_API.md.
+> They are five DIFFERENT surfaces, not five cards on one dashboard:
 >   question-quality        = a content-team WORK QUEUE (rows + an action per row)
 >   release-health          = a release-owner GO/NO-GO decision (one headline number)
 >   notification-effectiveness = a growth KILL LIST (one recommendation at a time)
 >   onboarding-funnel       = an ops DIAGNOSTIC (stage-to-stage loss, biggest drop first)
+>   purchase-funnel         = a CONVERSION diagnostic (per-day steps + a conversion line)
 > Responses are RAW JSON — there is no {success,data} envelope; branch on HTTP status.
-> Every response carries meta.caveats: string[] — surface it, do not drop it.
+> Every response carries meta.caveats: string[] (purchase-funnel: top-level caveats[])
+>   — surface it, do not drop it.
 > Render null as "not recorded yet" / "not derivable", never as 0 and never as a green tick.
+> Every /sme/analytics/* route takes an optional ?exam= — read §0.1 before wiring a filter.
 > These are review reads over the production DB: open-and-refresh pages, never polling tiles.
 > ```
 
-Four read-only decision endpoints for the SME portal. Each one exists because a
+Five read-only decision endpoints for the SME portal. Each one exists because a
 decision is currently being made by guessing:
 
 | Endpoint | The guess it replaces |
@@ -52,6 +60,7 @@ decision is currently being made by guessing:
 | `GET /sme/analytics/release-health` | "should we force-update?" — today it's a hunch |
 | `GET /sme/analytics/notification-effectiveness` | "is this push working?" — today the only lever is *send more* |
 | `GET /sme/analytics/onboarding-funnel` | "where do signups die?" — today nobody can answer at all |
+| `GET /sme/analytics/purchase-funnel` | "where does the checkout lose people?" — today only the paid orders are visible |
 
 **Base URL:** `{{BASE_URL}}/api/v1` (prod `https://app.stanzasoft.ai`)
 **Auth:** `x-api-key: <API_KEY_SECRET>` on every request · **Swagger:** `/api/docs` (group **SME**)
@@ -79,7 +88,46 @@ body; nothing here returns 402.)
 Every response carries a `meta` block. **Read it.** It states the window actually
 used, the thresholds actually applied, whether a row cap bit, and the caveats that
 make the numbers honest. `meta.caveats` is a ready-to-render `string[]` — put it
-behind an "i" on the panel rather than reprinting it in a deck.
+behind an "i" on the panel rather than reprinting it in a deck. (`purchase-funnel`,
+§5, is the one exception to the `meta` convention: it is a small enough response that
+`exam`, `days` and `caveats` sit at the top level and there is no `meta` block.)
+
+## ⚠️ 0.1 `?exam=` — additive on every analytics route here
+
+Every `/sme/analytics/*` route — §2, §3, §4 and the new §5 — accepts an optional
+**`?exam=<slug>`** as of **2026-09-21**. `GET /sme/content/question-quality` (§1) does
+**not**; that gap is still open and is listed in §7.
+
+**Omit it and nothing changes.** The response is byte-identical to what the route has
+always returned: no new keys, no wrapper. **An unknown slug is a `400`** on every one
+of them — never a silently empty chart, because on a decision screen "0" and "you
+typo'd the slug" look identical and only one is worth acting on.
+
+Supply it and two rules govern how honest the number can be. They **point in opposite
+directions**, which is the whole trap:
+
+* **Person-keyed** (`user_profiles.active_exam_id`) — §3, §4's cohort, and §5's event
+  steps. **NULL ≡ `upsc-cse`**: the person onboarded before app 2.0 (2026-09-17, which
+  made the exam picker onboarding step 1) and has never used the switcher, so the
+  default is what they were served. Full history — but **retro-attributed**: a user is
+  counted under the exam they have picked *today*, applied backwards over everything
+  they ever did. There is no switcher history.
+* **Request-keyed** (`api_usage.exam_id`) — §2. **NULL = "not recorded" and the row is
+  EXCLUDED**, `upsc-cse` included, because the column only exists from the 2026-09-21
+  deploy. Those responses carry **`examCoverage { since, unknownRows }`** so the portal
+  can draw a start date instead of a cliff.
+
+And two places where a per-exam number **cannot** be honest, said out loud rather than
+quietly fudged — both because `auth_events` has no exam column and no relation to join
+one through:
+
+* §2's `clientErrors` stays **app-wide** beside exam-scoped actives
+  (`meta.clientErrorsExamScoped: false`);
+* §4's whole `authEvents` block stays **app-wide** beside an exam-scoped funnel.
+
+The per-route reference table lives in
+[SME_USAGE_ANALYTICS.md §0b](./SME_USAGE_ANALYTICS.md) — that doc is the field-level
+contract; this one is the narrative.
 
 ---
 
@@ -128,6 +176,7 @@ honest, the list just gets shorter.
 | Param | Default | Notes |
 |---|---|---|
 | `pool` | `both` | `content` \| `simulation` \| `both`. Every row carries its own `pool`. |
+| `exam` | — | Exam mode slug, e.g. `appsc-group-1`. Matches that exam **or** the `*` (every-exam) sentinel. Omit to score every exam together. **Unknown slug = 400**, never a silently empty work queue. Max 64 chars. |
 | `subject`, `topic` | — | Exact match. content pool → `content_documents`; simulation pool → `simulation_questions`. |
 | `minAttempts` | `20` | 5–1000. Pushed into SQL as a `HAVING`. |
 | `suspectRate` | `0.6` | 0.3–0.99. Only affects the `suspicious` band; `worse_than_chance` uses the per-question guessing rate. |
@@ -166,9 +215,13 @@ honest, the list just gets shorter.
     "reason": "82.9% wrong over 240 answers — worse than the 75% you would get by guessing… 62.5% picked B while the key says C — check the key first. No explanation is attached, so nobody who missed it learned why."
   }],
   "summary": { "eligible": 812, "worseThanChance": 9, "suspicious": 41, "ok": 762, "totalLearnersMisled": 143.2 },
-  "meta": { "pools": ["content","simulation"], "minAttempts": 20, "candidateCapHit": false, "caveats": [ … ] }
+  "meta": { "pools": ["content","simulation"], "exam": null, "minAttempts": 20, "candidateCapHit": false, "caveats": [ … ] }
 }
 ```
+
+`meta.exam` echoes the **resolved** slug — trimmed and lower-cased — or `null` when no
+`?exam=` was sent and the queue spans every exam. Render it: a work queue that silently
+covers one exam and a work queue that covers all of them look identical otherwise.
 
 `contradictsKey: true` (the most-picked option is **not** the key and beats it) is
 the single highest-yield signal in the payload — it almost always means the answer
@@ -191,9 +244,22 @@ key is wrong.
   the parent `simulation_attempts.startedAt` and only **submitted** attempts count.
   Blank answers are reported as `skipped` and excluded from `attempts` — a skip is
   not a wrong answer.
-* **There is no "exam" dimension** on either bank (`content_documents` and
-  `simulation_questions` both carry subject/topic only), so filtering by exam is not
-  possible today.
+* **`?exam=` scopes the queue, and the tag lives on the PARENT, never on the question.**
+  The content pool filters on `content_documents.examIds` (on the row directly); the
+  simulation pool filters on the `examIds` of the simulations each question is linked into
+  via `SimulationQuestionLink` — `simulation_questions` itself carries no `examIds`. The slug
+  is resolved **before any query runs**, so an unknown one is a 400 rather than an empty work
+  queue, and `meta.exam` echoes what was applied.
+
+  ⚠️ **A simulation question assigned to no test is unreachable under an exam filter.** That
+  is by design: it is published nowhere, so it belongs to no exam's catalogue. It is still
+  scored in the unfiltered call.
+
+  The `meta.caveats` entry says which case you got — one of these two strings, verbatim:
+
+  > `exam filter APPLIED (appsc-group-1, plus the "*" every-exam sentinel). The tag lives on the parent, not the question: the content pool is filtered on content_documents.examIds, the simulation pool on the examIds of the simulations each question is linked into — so a simulation question assigned to no test cannot appear under an exam filter.`
+
+  > `No exam filter: every exam is scored together. Pass ?exam=<slug> to scope the queue — the content pool filters on content_documents.examIds and the simulation pool on the parent simulations' examIds.`
 * Neither attempts table has a **timestamp index**, so this is a bounded sequential
   scan of the window. It is a review read, not a dashboard tile — do not poll it.
 
@@ -284,10 +350,16 @@ clean". Write that sentence into the empty state.
 
 Per **app version × platform**: active users, requests, 4xx/5xx error rate,
 `client_error` count per active user, and adoption share — plus an explicit
-comparison against the next-older build on the same platform, so *"is 1.7 worse
-than 1.6?"* is one glance.
+comparison against the next-older build on the same platform, so *"is 2.0 worse
+than 1.9?"* is one glance.
 
 ### ⚠️ `app_version IS NULL` is the pre-1.7 cohort, not missing data
+
+**Current store build is 2.0** (Android versionCode 27, iOS 2.0 build 3), released
+**2026-09-17**, so the ladder the version rows walk is now 1.6 → 1.7 → 1.8 → 1.9 → 2.0. The
+`app_version IS NULL` rule below is **unchanged** by that and stays exactly as written. Note
+also that `AppConfig.minAppVersion` on production is **1.0.0** — i.e. **no forced update is in
+effect**; this endpoint supplies the number you would use to decide on one, nothing more.
 
 `x-app-version` shipped **with 1.7**. Every request from an older build arrives
 with no version header at all. So the NULL bucket **is** "pre-1.7" — precisely the
@@ -313,6 +385,32 @@ stretch that has already been purged, instead of returning a confident empty ans
 |---|---|---|
 | `days` / `from` / `to` | `14` | **Max 30** — the api_usage raw retention horizon. |
 | `platform` | — | `ios` \| `android` \| `web`. Omit for all, including the NULL-platform rows. |
+| `exam` | — | Exam slug. **400** on an unknown one. Filters the `api_usage` half on `exam_id` (rows captured before 2026-09-21 are excluded, `upsc-cse` included) and adds `examCoverage` + two `meta` keys + two caveats. ⚠️ **`clientErrors` is NOT scoped** — see below. |
+
+### ⚠️ With `?exam=`, one column stays app-wide — and the response says which
+
+This is the honest half of exam-scoping this endpoint. `activeUsers`, `requests`, the
+4xx/5xx counts and every rate derived from them come from `api_usage`, which has an
+`exam_id`. **`clientErrors` comes from `auth_events`, which has neither an exam column
+nor a relation to join one through.** There is no query that would scope it.
+
+So rather than silently dropping the column, or silently pretending it is scoped, the
+response keeps it **app-wide** beside exam-narrowed actives and flags it:
+
+* **`meta.clientErrorsExamScoped: false`** — present only when an exam filter is on.
+  Branch on it.
+* a caveat, verbatim: *"clientErrors is NOT exam-scoped … with `exam` set the
+  client-error column stays APP-WIDE while activeUsers/requests beside it are narrowed
+  — which makes clientErrorsPerActiveUser an overstatement, not a comparable per-exam
+  rate. Judge builds on errorRateExcludingPaywallPct when filtering by exam."*
+
+**`clientErrorsPerActiveUser` is therefore inflated under an exam filter**, roughly by
+the inverse of that exam's share of traffic. Every build is inflated by the same rough
+factor, so the *gap* between two builds is scaled up too — which means a
+`clientErrorPerUserDelta` that sat comfortably inside the **±0.5** threshold can cross
+it, and `comparison.verdict` can read `worse` on that axis alone. With an exam
+selected, judge on `errorRateExcludingPaywallPct` and treat the client-error axis as
+unusable; compare crash rates with the exam filter **off**.
 
 ### Response (abridged)
 
@@ -346,6 +444,111 @@ stretch that has already been purged, instead of returning a confident empty ans
 }
 ```
 
+With `?exam=` the same body gains exactly three things — `examCoverage` as a **sibling
+of `versions`/`platforms`** (not inside `meta`), and two `meta` keys:
+
+<!-- captured from staging 2026-09-21, backend f6329e6 -->
+`GET /sme/analytics/release-health?days=14&exam=appsc-group-1` — verbatim, with
+`versions[]` and `platforms[]` trimmed to their single returned row each and the five
+non-exam `meta.caveats` strings replaced by `"…"` (the two exam caveats are shown in
+full, because they are the ones this section is about):
+
+```json
+{
+  "versions": [
+    {
+      "appVersion": "1.9",
+      "appVersionLabel": "1.9",
+      "platform": "android",
+      "platformLabel": "android",
+      "activeUsers": 0,
+      "requests": 0,
+      "errors4xx": 0,
+      "errors5xx": 0,
+      "errorRatePct": 0,
+      "serverErrorRatePct": 0,
+      "paywall402": 0,
+      "errorRateExcludingPaywallPct": 0,
+      "clientErrors": 11,
+      "clientErrorsPerActiveUser": 0,
+      "adoptionSharePct": 0,
+      "comparison": {
+        "comparedTo": null,
+        "comparedToLabel": null,
+        "errorRateDeltaPoints": 0,
+        "clientErrorPerUserDelta": 0,
+        "verdict": "insufficient_data",
+        "note": "No older build on this platform inside the window to compare against."
+      }
+    }
+  ],
+  "platforms": [
+    {
+      "platform": "android",
+      "platformLabel": "android",
+      "activeUsers": 0,
+      "requests": 0,
+      "versions": 1,
+      "worstVersion": null,
+      "worstVersionLabel": null,
+      "worstVersionErrorRatePct": null,
+      "preHeaderSharePct": 0
+    }
+  ],
+  "examCoverage": {
+    "since": "2026-09-21T14:30:34.917Z",
+    "unknownRows": 7473
+  },
+  "meta": {
+    "from": "2026-09-07T14:46:38.019Z",
+    "to": "2026-09-21T14:46:38.019Z",
+    "windowDays": 14,
+    "platformFilter": null,
+    "examFilter": "appsc-group-1",
+    "clientErrorsExamScoped": false,
+    "minRequestsForVerdict": 200,
+    "minUsersForVerdict": 5,
+    "errorRateDeltaPoints": 1,
+    "clientErrorDeltaPerUser": 0.5,
+    "apiUsageRawRetentionDays": 30,
+    "windowExceedsApiUsageRetention": false,
+    "activeUserRowCap": 20000,
+    "activeUserRowCapHit": false,
+    "statusRowCapHit": false,
+    "clientErrorRowCapHit": false,
+    "caveats": [
+      "…",
+      "Exam filter \"appsc-group-1\": api_usage.exam_id only exists from the 2026-09-21 deploy, and rows without it are EXCLUDED (a request captured before the column belongs to no exam — not to upsc-cse). 7473 row(s) in this window were dropped for that reason, and the exam split is only real from 2026-09-21T14:30:34.917Z onward.",
+      "clientErrors is NOT exam-scoped. It comes from auth_events, which has no exam column and no relation to join one through, so with `exam` set the client-error column stays APP-WIDE while activeUsers/requests beside it are narrowed — which makes clientErrorsPerActiveUser an overstatement, not a comparable per-exam rate. Judge builds on errorRateExcludingPaywallPct when filtering by exam."
+    ]
+  }
+}
+```
+
+> 🔴 **That capture is the failure mode this section warns about, caught live.** Look at
+> the one `versions[]` row: `activeUsers: 0` and `requests: 0`, but
+> `clientErrors: 11`. Both are correct and they disagree on purpose —
+> `activeUsers`/`requests` come from `api_usage` and **were narrowed to APPSC**, while
+> `clientErrors` comes from `auth_events` and **was not** (`clientErrorsExamScoped:
+> false`). `unknownRows: 7473` is the rest of the window's traffic, discarded for
+> predating the column.
+>
+> A panel that renders this naively says *"1.9 has 11 client errors and no users."*
+> **Render `examCoverage.since` and the `clientErrorsExamScoped` caveat next to the
+> numbers, or do not offer the exam filter on this screen at all.**
+>
+> Note `since` here is `2026-09-21T14:30:34.917Z` — minutes before the capture, because
+> that is when this build was deployed to staging. On production it will be the
+> production deploy instant.
+
+`examCoverage.since` is **the start date of the per-exam view**, not of the product —
+render it as *"per-exam data from 21 Sep 2026"*. When it is `null` the caveat says so
+in words (*"NOT ONE row in this window carries an exam, so every number here is zero
+for capture reasons rather than product reasons"*) and the panel must render as **not
+recorded yet**, never as a healthy build with no errors. `unknownRows` is a discard
+count for this exact window, not a backlog; it shrinks to zero as pre-deploy rows age
+out of the 30-day raw retention.
+
 ### Reading the verdict
 
 `verdict ∈ better | worse | similar | insufficient_data`, computed against the
@@ -373,6 +576,11 @@ picking a winner.
   comes from `auth_events` (`event_type='client_error'`) and can therefore create a
   row for a version that made no captured request at all. That is deliberate: a
   build that only produces crashes is exactly what we are hunting.
+* With `?exam=`: the api_usage half is exam-scoped from **2026-09-21 only**
+  (`examCoverage`), and **`clientErrors` is not exam-scoped at all**
+  (`meta.clientErrorsExamScoped: false`). A force-update decision is about a *build*,
+  not an exam — so make the un-filtered view the default one on this screen and treat
+  the exam filter as a drill-down.
 
 ### How to use this data
 
@@ -398,7 +606,11 @@ read as a broken release.
 count is the number of people who will see a blocking update screen on next launch —
 communicate it before you ship, not after.
 
-#### What it actually returns today — measured 2026-07-23, `days=30`
+#### What it returned on 2026-07-23, `days=30` — a historical snapshot, not today's numbers
+
+> ⚠️ Dated 2026-07-23, months before 2.0. Four store releases have landed since (1.8, 1.9, 2.0),
+> so the real table now has more version rows and a much smaller NULL bucket. Re-run the
+> endpoint before quoting any figure below; the *reasoning* underneath it is what still applies.
 
 | appVersion | platform | activeUsers | requests | errorRatePct | excl. paywall | clientErrors/user | verdict |
 |---|---|---|---|---|---|---|---|
@@ -511,6 +723,29 @@ with no matured sample returns `maturedReadRatePct: null` — *not* `0`.
 | `maturationDays` | `3` | 0–30. Rows younger than this are `pending` and excluded from rates. |
 | `minSent` | `50` | Minimum **matured** sends before a type can be named a worst performer. |
 | `poorReadRatePct` | `25` | Matured read-rate % at or below which a type is a worst performer. |
+| `exam` | — | Exam slug. **400** on an unknown one. Matches the **RECIPIENT's** `active_exam_id` (NULL ≡ `upsc-cse`) — see below. Adds `meta.examFilter` and one caveat; **no `examCoverage`**, because nothing here is `api_usage`-sourced. |
+
+### ⚠️ `?exam=` means "who received it", not "what it was about"
+
+`notification_history` has **no exam column**, and the rule engine that sends these does
+not record which exam a send was reasoned about. So the filter matches through the
+recipient's `user_profiles.active_exam_id`, **read as of now**. Two consequences:
+
+* it reads as *"pushes that **landed on people who study** X"*, never *"pushes **about**
+  X"* — a `streak_reminder` to an APPSC aspirant is an APPSC row here whatever the
+  content was;
+* a user who switched exam **takes their whole send history with them**, so yesterday's
+  switch re-labels months of sends.
+
+The response ships that sentence as a caveat with the slug interpolated, and
+`meta.examFilter` echoes the resolved slug. Everything else — the maturation split, the
+`worstPerformers` kill-list, `timeToRead` — is unchanged in shape and meaning.
+
+⚠️ **Do not rank kill-list candidates per exam.** `worstPerformers` is ordered by
+`wastedSends`, and narrowing the audience shrinks every volume on the screen — a type
+worth killing globally can fall below `minSent` (default 50) inside one exam and simply
+vanish from the list. Kill on the un-filtered view; use the exam filter to check whether
+a decision lands differently for one audience.
 
 ### Response (abridged)
 
@@ -547,6 +782,9 @@ matters less than a 15%-read type sent 4000 times.
 * `notification_history` has no index on `type` or on `createdAt` alone (only
   `(userId, createdAt)`), so this is a bounded sequential scan of the window. Review
   read, not a dashboard tile — do not poll it.
+* With `?exam=`, `meta.examFilter` carries the resolved slug and the audience is matched
+  through the recipient's current exam. There is **no** `examCoverage` here and none is
+  needed: the source has full history. The weakness is retro-attribution, not coverage.
 
 ### ⚠️ Field-name trap: there is no `readRatePct` on `byType`
 
@@ -650,21 +888,23 @@ migration `20260723120000_add_auth_events` on **2026-07-23**; no row in it can
 predate that. Any part of a window reaching further back is **structurally empty** —
 not quiet, not healthy, *empty*.
 
-**And it is mostly a client-ingested sink — but emitter coverage is now SPLIT.**
+**And it is mostly a client-ingested sink — but emitter coverage is SPLIT.**
 Verified against the codebase:
 
 | Event type | Server-side emitter | Mobile emitter | So a zero means |
 | --- | --- | --- | --- |
-| `otp_send_failed` | ✅ `OtpService.emitOtpSendFailed` — both `storeOtp` cache-unavailable branches **and** the Wylto delivery failure. Live from the deploy that added it. | pending a release | "no **backend-visible** send failure" — narrower than "no failure", but a **non-zero here is real data, do not discount it** |
-| `login_attempt` | ❌ | pending a release | "not recorded yet" |
-| `login_success` | ❌ | pending a release | "not recorded yet" |
-| `login_failed` | ❌ | pending a release | "not recorded yet" |
-| `otp_verify_failed` | ❌ | pending a release | "not recorded yet" |
+| `otp_send_failed` | ✅ `OtpService.emitOtpSendFailed` — both `storeOtp` cache-unavailable branches **and** the Wylto delivery failure. Live from the deploy that added it. | ✅ app 2.0 | "no **backend-visible** send failure" — narrower than "no failure", but a **non-zero here is real data, do not discount it** |
+| `login_attempt` | ❌ | ✅ app 2.0 | "none from a 2.0 device" — still not "no attempts" |
+| `login_success` | ❌ | ✅ app 2.0 | "none from a 2.0 device" |
+| `login_failed` | ❌ | ✅ app 2.0 | "none from a 2.0 device" — still not "no failures" |
+| `otp_verify_failed` | ❌ | ✅ app 2.0 | "none from a 2.0 device" — still not "no failures" |
 
-So for the four mobile-only types: until that app release ships and users update,
-**these counts stay at zero however many logins are actually failing in
-production.** For `otp_send_failed` the backend now answers for itself — the exact
-gap that made the Valkey outage present only as users saying "OTP expired".
+The four client-only types are **live**: app **2.0** shipped to both stores on **2026-09-17**
+(Android 27, iOS 2.0 build 3) and emits all of them. They remain a **floor**, not a census,
+because a device on any older build emits nothing and never will — so counts grow with 2.0
+adoption, and a low number is partial coverage of the install base rather than a clean bill of
+health. For `otp_send_failed` the backend also answers for itself — the exact gap that made the
+Valkey outage present only as users saying "OTP expired".
 
 (`auth_events` also carries event types this endpoint does not read — e.g. `QuotaService`
 writes `chat_conversation_started`. A row in that table is not necessarily a funnel signal.)
@@ -680,9 +920,40 @@ So the response never lets a zero travel alone:
   "coveredDays": 1, "uncoveredDays": 29,
   "totalEvents": 0, "totalFailures": 0,
   "zeroMeansNoDataNotNoFailures": true,             // ← branch on THIS
-  "interpretation": "NO DATA YET, not \"no failures\". auth_events capture began 2026-07-23 (IST) … Emitter coverage is SPLIT. otp_send_failed now has a SERVER-SIDE emitter … login_attempt/login_success/login_failed/otp_verify_failed remain MOBILE-ONLY … Render this panel as \"not recorded yet\"."
+  "interpretation": "NO DATA YET, not \"no failures\". auth_events capture began 2026-07-23 (IST) … Emitter coverage is SPLIT … Render this panel as \"not recorded yet\"."
 }
 ```
+
+✅ **The `interpretation` string was corrected on 2026-09-21** (commit `4cfe6c0`). It previously
+claimed the four mobile-only event types were *"pending an app release"* and would *"stay at zero
+until that app release ships and users update"*. They shipped in app **2.0 on 2026-09-17**, so
+that sentence was telling readers to throw away real data — the same failure mode, in the same
+string, that once had people discounting genuine `otp_send_failed` counts.
+
+The shared clause `SmeOnboardingFunnelService.interpretation()` now emits, **verbatim** (it is
+also `meta.caveats[0]`, and the Swagger `@ApiOperation` twin says the same thing):
+
+> Emitter coverage is SPLIT, and the two halves now fail in different ways. otp_send_failed has a
+> SERVER-SIDE emitter (OtpService writes it on both cache-unavailable branches and on a Wylto
+> delivery failure) as well as a mobile one, so its counts are backend-observed and complete: a
+> non-zero is real and a zero genuinely means no backend-visible send failure.
+> login_attempt/login_success/login_failed/otp_verify_failed are MOBILE-ONLY, emitted through the
+> public ingest endpoint by app 2.0 (released 2026-09-17). They are therefore no longer
+> structurally zero — but they are still a FLOOR, and the floor is the ADOPTED SHARE of 2.0, not
+> the user base: a failure on an older build, or on any build before 2026-09-17, is not recorded
+> anywhere. Weigh those four against /sme/analytics/release-health adoption before reading a
+> change in them as a change in reality.
+
+That clause is wrapped by one of three outer sentences depending on the window —
+*"NO DATA — the entire requested window predates capture…"* (`coveredDays === 0`),
+*"NO DATA YET, not \"no failures\"…"* (`totalEvents === 0`), or
+*"N day(s) of this window are covered by auth_events capture… Counts are therefore a FLOOR on
+real failures, never a ceiling."* **Render the string, do not paraphrase it** — and note the
+new instruction inside it: cross-check a movement in those four counts against
+`release-health` **adoption** before calling it a movement in reality.
+
+⚠️ Whenever an emitter is added, removed, or **ships**, this string is part of the change. It has
+now been stale in both directions.
 
 * `zeroMeansNoDataNotNoFailures: true` ⇒ render **"not recorded yet"**, never
   **"no failures"**, and never a green tick.
@@ -757,6 +1028,74 @@ had time to convert yet. For a matured read, set an explicit `to` a few days bac
 |---|---|---|
 | `days` | `30` | Max **365** (`user_auth` has full history). Selects the signup cohort. |
 | `from` / `to` | — | ISO datetime, or a bare `YYYY-MM-DD` read as an **IST** calendar date. The 365-day span is enforced even when both are supplied. |
+| `exam` | — | Exam slug. **400** on an unknown one. Narrows the **signup cohort** by `active_exam_id` (NULL ≡ `upsc-cse`) and adds an `examSelected` block + `meta.examFilter`. ⚠️ The `authEvents` block is **not** narrowed — see below. |
+
+### ⚠️ `?exam=` narrows the funnel but NOT the failure panel
+
+The cohort, `stages[]`, `summary` and `byDay[]` all narrow to the exam. **`authEvents`
+does not, and cannot** — a pre-auth event has no user to join an exam through, which is
+the entire reason `auth_events` exists as a separate sink. So an exam-scoped funnel sits
+beside an **app-wide** failure panel on the same screen. Label it explicitly, or a reader
+will attribute every OTP failure in the country to one exam. The response says so in a
+caveat.
+
+Cohort attribution is also **retro-attributed**: a signup is counted under the exam the
+person has picked *today*, not the one they saw on signup day. There is no switcher
+history, and the caveat says that too.
+
+### `examSelected` — present only with `?exam=`, and deliberately NOT a sixth stage
+
+`stages[]` is a published array that the portal indexes **positionally** and this doc
+enumerates by order. Slipping an exam-selection stage into the middle of it would
+silently renumber every existing stage — for a caller who never asked about exams. So it
+sits **beside** the funnel as its own key:
+
+<!-- captured from staging 2026-09-21, backend f6329e6 -->
+`GET /sme/analytics/onboarding-funnel?days=14&exam=appsc-group-1` — the `examSelected`
+key of that response, verbatim (staging's signup volume is tiny, which is why the numbers
+are small; the keys are the point):
+
+```jsonc
+"examSelected": {
+  "exam": "appsc-group-1",
+  "cohortSignups": 4,
+  "windowSignups": 5,
+  "explicitlySelected": 5,
+  "explicitlySelectedPct": 100,
+  "nullCount": 0,
+  "nullBucketedAs": "upsc-cse",
+  "byExam": [
+    { "examId": "appsc-group-1", "users": 4 },
+    { "examId": "upsc-cse", "users": 1 }
+  ],
+  "note": "4 of 5 signups in this window belong to \"appsc-group-1\"; the rest of this response describes only those. 5 signup(s) carry an explicit active_exam_id — app 2.0 (released 2026-09-17) made the exam picker onboarding step 1, so this share rises with 2.0 adoption. The remaining 0 never picked (pre-2.0 onboarding, switcher never used) and are counted under upsc-cse, which is the exam they were actually served."
+}
+```
+
+The same response's `meta.examFilter` is `"appsc-group-1"`, and its last caveat — also
+verbatim — is the retro-attribution warning in words:
+
+> *"Exam filter \"appsc-group-1\": the COHORT is narrowed by `user_profiles.active_exam_id`
+> read AS OF NOW (NULL ≡ upsc-cse — the pre-2.0 remainder, who were served the default). A
+> signup is therefore attributed to the exam the person has picked today, not the one they
+> saw on signup day; there is no history of the switcher. The `auth_events` block below is
+> NOT narrowed at all — a pre-auth event has no user to join an exam through — so it stays
+> APP-WIDE beside an exam-scoped funnel."*
+
+Three things about it that will otherwise be read as bugs:
+
+* **`byExam` describes the WHOLE window, not the filtered cohort.** A breakdown of a set
+  already narrowed to one exam is a single bar, which answers nothing. `cohortSignups`
+  and `windowSignups` sit side by side precisely so the panel can say *"96 of 412 signups
+  in this window are yours"*.
+* **`nullCount` is folded into `upsc-cse` inside `byExam`** — exactly as every other
+  per-exam number in this API does it — and reported separately beside it. When it is
+  large, "UPSC" partly means "unclassified". `nullBucketedAs` states the rule rather than
+  implying it.
+* **`explicitlySelectedPct` is an adoption metric, not a funnel metric.** It measures the
+  share of signups that came through 2.0's picker (or have used the switcher); it rises
+  with 2.0 uptake, not with product quality. `cohort.signups` still equals
+  `examSelected.cohortSignups` — the funnel's own denominator is unchanged.
 
 ### Response (abridged)
 
@@ -783,6 +1122,7 @@ had time to convert yet. For a matured read, set an explicit `to` a few days bac
     },
     "detail": { "verifiedWithoutTimestamp": 2 }
   }],
+  // "examSelected": { … }   ← only with ?exam=, a SIBLING of stages[], never inside it
   "byDay": [{
     "day": "2026-07-24", "signups": 18, "phoneVerified": 4,
     "onboardingCompleted": 3, "psychometricResolved": 3, "firstAction": 2,
@@ -804,7 +1144,9 @@ had time to convert yet. For a matured read, set an explicit `to` a few days bac
     },
     "dailyRowCapHit": false, "identifierRowCapHit": false
   },
-  "meta": { "conversionMeasuredAsOf": "…", "stageDefinitions": { … }, "cohortRowCapHit": false, "caveats": [ … ] }
+  "meta": { "conversionMeasuredAsOf": "…", "stageDefinitions": { … }, "cohortRowCapHit": false,
+            "examFilter": "appsc-group-1",   // ← only with ?exam=
+            "caveats": [ … ] }
 }
 ```
 
@@ -841,6 +1183,10 @@ reason `loginSuccessRatePct` exists.
   ENGAGED source, 20 000 `auth_events` rows for the day series, 20 000 distinct
   identifier rows. Each one reports itself in `meta` when it bites; `byType` totals
   are exact (a DB-side aggregate) even when the day series is capped.
+* With `?exam=`: the cohort is narrowed by `active_exam_id` **read as of now** (NULL ≡
+  `upsc-cse`), so a signup is attributed to the exam the person has picked today, not
+  the one they saw on signup day. The **`authEvents` block is not narrowed at all** and
+  stays app-wide beside the exam-scoped funnel. Both sentences ship as caveats.
 
 ### How to use this data
 
@@ -905,7 +1251,7 @@ Four things in that payload that a naive UI will get wrong:
   (timed) versus 487 who explicitly skipped (countable, untimeable, because a skip is a bare
   boolean with no instant stored anywhere). Print the coverage percentage next to the median.
 * **`timeToReach.derivable: false` on stage 3 is permanent** until `user_profiles` gets an
-  `onboarding_completed_at` column (§6). Show the `reason` string; do not leave a blank cell,
+  `onboarding_completed_at` column (§7). Show the `reason` string; do not leave a blank cell,
   and never fall back to `updated_at`.
 
 **The `authEvents` block, honestly.** On that run: `available: true`, `coveredDays: 1`,
@@ -930,7 +1276,89 @@ cache a funnel number as a fact; always show `meta.conversionMeasuredAsOf`.
 
 ---
 
-## 5. Performance stance (shared by all four)
+## 5. `GET /sme/analytics/purchase-funnel` — new 2026-09-21
+
+> Every other analytics read answers *"what is happening"*. This one answers **"where
+> does the money stop"** — and it is the only read that joins the **client's** view of a
+> purchase (`auth_events`) to the **server's** (`orders`).
+
+**Field-level contract:** [SME_USAGE_ANALYTICS.md §4c](./SME_USAGE_ANALYTICS.md) — that
+doc is the reference and carries the full example body. This section is the narrative:
+why it exists, and the three ways it will be misread.
+
+`GET /sme/analytics/purchase-funnel?days=30&exam=` returns, **per IST day**:
+`paywallViewed → upgradeTapped → checkoutOpened → checkoutAbandoned / purchaseFailed →
+ordersPaid`, plus `conversionPct`, a `totals` block and a top-level `caveats: string[]`
+(this is the one endpoint here with no `meta` wrapper). `days` is **1..90**, default 30 —
+`auth_events` is purged at 90, so a longer window would lose its own tail.
+
+### Why it is its own endpoint, and not another metric on `/summary`
+
+The two halves of a purchase have **genuinely different trust** and **genuinely
+different exam attribution**, and keeping them in one place is what stops the difference
+being papered over:
+
+| | The five funnel steps | `ordersPaid` |
+|---|---|---|
+| Written by | the **app**, through the *public* diagnostics ingest endpoint | the **server**, on a verified payment |
+| Trust | a floor; nothing here is forgery-proof, and a build that does not emit is invisible | server truth |
+| Exists since | app **2.0**, 2026-09-17 — and only on adopted devices | always |
+| Exam | the user's **current** `active_exam_id` (retro-attributed) | `orders.exam_id` — the exam the money actually bought, exact |
+
+### Two choices that matter more than the query
+
+**1. DISTINCT USERS, not event rows.** A paywall re-renders; a checkout sheet gets
+reopened. Counting rows would make `paywallViewed` a function of how chatty the build is,
+and `conversionPct` would *fall* every time the UI got more responsive. Each step is
+`count(DISTINCT user_id)` inside its IST day. The corollary is that window `totals` are
+those per-day distinct counts **summed** — a user active on three days counts three
+times. That is the only total consistent with the chart above it.
+
+**2. `conversionPct` is `null`, never `0`, on a zero denominator.** A `0%` there reads as
+*"we showed the paywall and converted nobody"*. The truth is that **there is no
+denominator**, which is a different fact and usually means the day predates the emitting
+build rather than that the paywall failed. Branch on `paywallViewed`, not on the rate.
+
+### The three misreadings, in advance
+
+* **`conversionPct > 100` is not a bug.** `ordersPaid` is not joined to the events, so
+  someone who bought without a recorded paywall view lands in the numerator only. A
+  conversion above 100% is a direct **measure of emitter coverage** — the gap between how
+  many people bought and how many the client told us saw the paywall. Render it, do not
+  clamp it. As 2.0 adoption rises it will fall toward a real rate, and *that fall is not
+  a regression*.
+* **A rising conversion can be adoption, not improvement.** Same cause, opposite
+  direction: every step is a floor whose height is 2.0's adopted share. Cross-check
+  against `release-health` adoption before crediting a paywall change.
+* **A per-exam `conversionPct` mixes two attribution rules.** `auth_events` rows carry no
+  exam, so with `?exam=` a step is attributed to the exam the user has picked **at query
+  time** — a user who viewed the APPSC paywall in June and has since switched to UPSC
+  counts today as a UPSC paywall view. `ordersPaid` does not share this weakness. So the
+  per-exam rate has a **retro-attributed denominator** and an **exactly-attributed
+  numerator**: read it as directional, and read the all-exams number (omit `exam`) as the
+  exact one. The service ships exactly that sentence as the last `caveats` entry whenever
+  `exam` is supplied.
+
+### What a good visualisation is
+
+A **per-day stacked/step column** for the five client steps with `ordersPaid` as a
+visually distinct mark — it is a different *kind* of fact, not a sixth step — and
+`conversionPct` as a **line on a secondary axis**. The line must show a **gap** where the
+value is `null` and must be allowed past **100**. The step-to-step loss is the subject:
+`paywallViewed → upgradeTapped` is the interest drop, `checkoutOpened →
+checkoutAbandoned` is the pricing/friction drop, and `purchaseFailed` beside them is the
+one that is *ours to fix*.
+
+Render `caveats[]` on the panel. Six strings always, seven with `?exam=`.
+
+**The action that follows.** If the loss is at `upgradeTapped`, the paywall copy or price
+is the problem. If it is at `checkoutAbandoned`, the checkout is. If `purchaseFailed` is
+non-trivial, that is an engineering bug and it belongs in the tracker, not in a growth
+review.
+
+---
+
+## 6. Performance stance (shared by all five)
 
 These reads share the **production database the mobile app runs on**. So:
 
@@ -940,19 +1368,24 @@ These reads share the **production database the mobile app runs on**. So:
   rather than silently truncating;
 * thresholds are pushed into SQL (`HAVING`) wherever possible so the DB, not Node,
   discards the tail;
-* everything is written through the **Prisma query builder**, not `$queryRaw` —
+* §1–§4 are written through the **Prisma query builder**, not `$queryRaw` —
   column casing in this schema is mixed *per table*
   (`simulation_attempts."userId"/"startedAt"` quoted camelCase vs
   `user_question_attempts.user_id/created_at` snake_case) and a raw-SQL typo is a
   runtime error, not a compile error. The one thing the builder cannot express is
   IST day-bucketing (`date_trunc`), which is done in TS with the shared
   `common/utils/ist-date.util` helper under a row cap.
+  **§5 is the exception**: `purchase-funnel` needs `count(DISTINCT user_id)` grouped by
+  an IST-shifted date, which the builder cannot express at all, so it uses two
+  `$queryRaw` aggregates against `auth_events` and `orders` — both single-table, both
+  snake_case, and the exam slug is **always a bind parameter**, never interpolated. It
+  has no row cap because the DB returns at most `days × 5` rows.
 
 **None of these are dashboard tiles.** They are review reads. Do not poll them.
 
 ---
 
-## 6. Known gaps worth fixing (not fixed here — schema changes)
+## 7. Known gaps worth fixing (not fixed here — schema changes)
 
 | Gap | Impact | Fix |
 |---|---|---|
@@ -961,11 +1394,14 @@ These reads share the **production database the mobile app runs on**. So:
 | `user_question_attempts` has no index on `updated_at`/`created_at` | §1 content pool is a sequential scan | add `@@index([updatedAt])` |
 | `simulation_answers` has no timestamp | §1 must fan out through `simulation_attempts` | add `createdAt` |
 | `simulation_attempts` has no index on `startedAt` | that fan-out is a sequential scan | add `@@index([startedAt])` |
-| No "exam" dimension on either question bank | cannot filter question-quality by exam | out of scope; product decision |
+| Question quality does not read the exam dimension | the columns exist (`content_documents.examIds`; simulation questions via `simulations.examIds`) but §1 ignores them, so a mixed-exam pool is reported as one bank | **still open after `4cfe6c0`** — that commit added `?exam=` to all 17 pre-existing `/sme/analytics/*` routes (18 with §5), but `/sme/content/question-quality` is on a different controller and was untouched. Add the same filter through `examArraySql`. |
+| **`auth_events` has no exam column and no relation to join one through** | three per-exam numbers cannot be honest: §2's `clientErrors` stays app-wide (`meta.clientErrorsExamScoped: false`), §4's whole `authEvents` block stays app-wide, and §5's five funnel steps have to borrow the user's *current* exam | a nullable `exam_id` on `auth_events`, stamped by the ingest endpoint from the `X-Exam` header. Only fixes it going forward — the same deploy-day floor as `api_usage.exam_id`. |
+| **No history of `user_profiles.active_exam_id`** | every person-keyed per-exam number is **retro-attributed**: a user, and everything they ever did, is counted under the exam they picked *today*. Worst on a newly-launched exam, where switchers are a large share of the population | an append-only `user_exam_switch` log, and read the exam *as of* the row's own timestamp. Until then the caveat is the fix. |
+| **`api_usage.exam_id` starts 2026-09-21** | there is **no per-exam usage history**, only a floor that begins on deploy day. `examCoverage.since` reports it rather than hiding it | nothing to fix — it ages out on its own. Do not backfill it by guessing `upsc-cse`; a NULL there genuinely means "not recorded". |
 | **`user_profiles` has no `onboarding_completed_at`** | §4 stage 3 time-to-reach is permanently underivable — the single biggest hole in the funnel | nullable `onboarding_completed_at`, stamped where `onboarding_completed` is first set to true |
 | **`user_profiles` has no `psychometric_skipped_at`** | §4 can count skippers but never time them | nullable `psychometric_skipped_at` |
 | **No `otp_sent` / `otp_verify_success` event type** | §4 can report OTP failure *counts* but never a *rate* | add both to `AUTH_EVENT_TYPES` and emit them from the client alongside the failures |
-| **No server-side emitter for `login_*` / `otp_verify_failed`** *(`otp_send_failed` is DONE — `OtpService.emitOtpSendFailed`)* | §4's login signal is blind until a mobile release ships | emit `otp_verify_failed` and the `login_*` pair from the backend auth path too, so no part of the signal depends on an app release |
+| **No server-side emitter for `login_*` / `otp_verify_failed`** *(`otp_send_failed` is DONE — `OtpService.emitOtpSendFailed`)* | app 2.0 now emits all four from the client, but the signal is still capped at the 2.0-adopted share of the install base and can never cover older builds | emit `otp_verify_failed` and the `login_*` pair from the backend auth path too, so no part of the signal depends on an app version |
 | **`user_auth` has no index on `createdAt`** | §4's cohort read is a sequential scan of `user_auth` | add `@@index([createdAt])` |
 | `user_content` / `user_document_progress` have no `created_at`-leading index | §4's first-action group-bys are bounded sequential scans | add `@@index([createdAt])` to each |
 
@@ -976,4 +1412,4 @@ Related: [SME_USAGE_ANALYTICS.md](./SME_USAGE_ANALYTICS.md) ·
 [SME_ACTIVITY_TRAIL_API.md](./SME_ACTIVITY_TRAIL_API.md) (the per-user view of the same
 `api_usage` / `auth_events` tables) ·
 [SME_NOTIFICATIONS_API.md](./SME_NOTIFICATIONS_API.md) (how the sends in §3 are made) ·
-[WHAT_CHANGED_2026-07-23.md](./WHAT_CHANGED_2026-07-23.md)
+[archive/WHAT_CHANGED_2026-07-23.md](./archive/WHAT_CHANGED_2026-07-23.md) (archived)

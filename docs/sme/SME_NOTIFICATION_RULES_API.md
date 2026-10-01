@@ -1,5 +1,7 @@
 # SME — Notification Rules API Guide
 
+> Changed 2026-09-21 — exam-scoping gaps closed (existing contracts).
+
 **Base URL:** `https://app.stanzasoft.ai/api/v1`
 **Auth:** `x-api-key: <API_KEY_SECRET>` on every request.
 **No response envelope** — branch on HTTP status, never on a `success` field.
@@ -105,7 +107,7 @@ the portal with no portal change.
 | `trial_ending` | SWEPT | PAYMENT | Trial ends in exactly `daysBefore` days |
 | `payment_success` | EVENT | PAYMENT | A payment grants premium |
 | `subscription_ended` | EVENT | PAYMENT | Premium lapses and the account drops to free |
-| `trial_started` | EVENT | PAYMENT | First signup |
+| `trial_started` | EVENT | PAYMENT | Onboarding completes. `{{trialDays}}` is the chosen exam's trial length; the event is NOT sent for an exam that grants no trial |
 | `streak_unfilled` | SWEPT | STREAK | Today's streak is incomplete (or untouched) |
 | `pyq_reminder` | SWEPT | STREAK | No PYQ attempted in `inactiveDays` days |
 | `streak_completed` | EVENT | STREAK | Today's streak crosses the completion threshold |
@@ -424,6 +426,11 @@ This is deliberate. Pointing it at reels or at library documents and hoping woul
 notification that announces something that does not exist. **Tell us what PIB content actually
 is and where it will live, and wiring it up is a small change** — nothing else about the rule
 needs to move.
+
+**Per-exam entitlement cannot be targeted.** A rule can scope by the exam the user *picked*
+(`examId` → `active_exam_id`, §4) and by a person-level `tier`, but there is no predicate for
+entitlement **in a given exam** — no way to express "premium in APPSC" or "free in APPSC but
+paying for UPSC". `tier` answers the person-level question only.
 
 **Per-user send times** are not supported: a rule has one `sendAtIst` for everyone. The
 scheduler ticks every 15 minutes, so that is the granularity.

@@ -1,7 +1,10 @@
 # SME — Push Notifications API Guide
 
+> Changed 2026-09-21 — per-exam broadcast, validated segment exam (+ fix), survey targetExams, feedback ?exam= (see [WHAT_CHANGED_2026-09-21.md](./WHAT_CHANGED_2026-09-21.md)).
+
 End-to-end reference for the **SME portal** to send push notifications to PrepMonkey
-users — to **one user**, to **everyone**, or to a **cohort** (premium / trial / free).
+users — to **one user**, to **everyone**, to **one exam mode**, or to a **cohort**
+(premium / trial / free).
 Same server-to-server model as the rest of the SME surface: we expose the endpoints,
 the SME team builds the UI.
 
@@ -78,7 +81,7 @@ curl -X POST "$BASE_URL/api/v1/sme/users/$USER_ID/notify" \
 
 ---
 
-## 2. Broadcast to EVERYONE — `POST /sme/notifications/broadcast`
+## 2. Broadcast to EVERYONE — or to ONE EXAM — `POST /sme/notifications/broadcast`
 
 Sends to the FCM `all_users` topic — i.e. every device subscribed to it. This is a
 **single FCM topic send** (cheap, instant), not a per-user fan-out.
@@ -91,18 +94,100 @@ x-api-key: <API_KEY_SECRET>
 ```json
 { "title": "New mock test live!", "body": "Attempt the 2026 Prediction Test now.", "type": "home" }
 ```
-Same body fields as §1 (no `:id` path param; `type`/`id`/`params` optional, `type` default `home`).
+Same body fields as §1 (no `:id` path param; `type`/`id`/`params` optional, `type` default `home`),
+plus one optional field:
 
-**Response 200**
+| Field | Req | Notes |
+|---|---|---|
+| exam | ➖ | exam slug, e.g. `appsc-group-1`. Sends to the `exam_<slug>` topic instead of `all_users`. Omit for the app-wide broadcast |
+
+**Response 200** (both paths)
+<!-- shape verified against code @c0a8fe5 — NOT captured on staging, see note -->
 ```json
-{ "messageId": "projects/prepmonkey-db925/messages/0:1700000000%..." }
+{
+  "messageId": "projects/prepmonkey-db925/messages/0:1700000000%...",
+  "topic": "all_users"
+}
 ```
+
+> ⚠️ **Not captured from staging, and it cannot be.** Staging's Firebase service account
+> cannot mint an access token — any real send there fails at the FCM call with a **500**
+> mentioning `iam.serviceAccounts.getAccessToken`, so there is no `messageId` to capture.
+> **This success shape was verified on the production credential path on 2026-09-17 for
+> the all-users case** (`topic: "all_users"`); the exam branch differs only in the
+> `topic` string. Everything on this route that runs *before* the FCM call — notably the
+> `exam` validation in §2.1 — **was** captured on staging and is shown there.
 A topic send returns an FCM **message id**, not per-user counts (FCM fans out to
 subscribers asynchronously). There is no count of how many devices it reached.
+
+`topic` is **new and present on both paths** — `all_users` when `exam` is omitted,
+`exam_<slug>` when it is not. It is deliberately not conditional: the portal can state
+the audience it just reached by reading the response, without branching on its own
+request body.
+
+### 2.1 Scoping a broadcast to one exam mode
+
+```json
+{ "title": "Group-1 prelims key is out", "body": "Check your score now.",
+  "type": "home", "exam": "appsc-group-1" }
+```
+<!-- shape verified against code @c0a8fe5 — success body not capturable on staging (§2) -->
+```json
+{
+  "messageId": "projects/prepmonkey-db925/messages/0:1700000000%...",
+  "topic": "exam_appsc-group-1"
+}
+```
+
+**The rejection path *was* captured.** `POST /sme/notifications/broadcast` with
+`{"title":"x","body":"y","type":"home","exam":"appsc-grp-1"}` on staging, 2026-09-21
+(backend `f6329e6`) — the guard runs **before** the FCM call, so nothing was sent:
+<!-- captured from staging 2026-09-21, backend f6329e6 -->
+```json
+{
+  "success": false,
+  "message": "Unknown exam \"appsc-grp-1\". Create it via POST /sme/exams first.",
+  "error": "Bad Request",
+  "statusCode": 400,
+  "timestamp": "2026-09-21T14:38:25.811Z",
+  "path": "/api/v1/sme/notifications/broadcast",
+  "method": "POST"
+}
+```
+
+And the topic name itself is captured, from the app-facing resolver in §5: a live
+`GET /notifications/topics` for a user whose `active_exam_id` is `appsc-group-1` returns
+**`"exam_appsc-group-1"`** — hyphen intact — which is exactly the string a broadcast must
+address.
+
+- The topic name is **`exam_` + the slug, verbatim** — hyphens are kept
+  (`exam_appsc-group-1`, `exam_upsc-cse`), not collapsed to underscores like the
+  `aspirant_*` / `medium_*` topics. The slug is the same literal used by `?exam=`,
+  `X-Exam` and `user_profiles.active_exam_id`, so there is no second spelling to learn.
+- **An unknown slug is a 400**, not a quiet send into the void:
+  `Unknown exam "<slug>". Create it via POST /sme/exams first.` (A topic send to a
+  nonexistent topic returns a perfectly good `messageId` and reaches nobody, forever —
+  which is why this one is validated rather than coerced.)
+- ⚠️ **`exam: "upsc-cse"` also reaches everyone who has never used the exam picker or
+  the home switcher.** An unset preference means UPSC everywhere in this API, and the
+  topic resolver follows the same rule (§5).
+- **Feed persistence is unchanged in shape:** a broadcast writes **one**
+  `topic_notifications` row keyed by the topic it addressed, and the bell feed merges
+  in the rows whose topic is in the reader's own resolved topic list. So an exam
+  broadcast is in-app visible to **exactly** the users who are on `exam_<slug>` — the
+  feed needs no exam column of its own, the topic *is* the scope.
 
 **Reach caveat:** only devices that have **opened the dashboard** (with permission
 granted) are subscribed to `all_users`. Brand-new / never-opened installs are not yet
 on the topic.
+
+⚠️ **Coverage of the new `exam_*` topics grows over time.** A device joins its exam
+topic the next time it loads the dashboard and re-syncs `GET /notifications/topics`
+(§5) — **no app release is involved**, but a device that has not opened the app since
+this shipped is not on its exam topic yet. In the first days after rollout an exam
+broadcast reaches a *subset* of that exam's users; `all_users` is unaffected. There is
+no count to check this against — compare it against how many users the segment send
+(§3) reports for the same exam.
 
 ---
 
@@ -124,23 +209,103 @@ x-api-key: <API_KEY_SECRET>
 | segment | ✅ | `premium` \| `trial` \| `free` |
 | title / body | ✅ | as above |
 | type / id / params | ➖ | as above |
+| exam | ➖ | exam slug — narrows the cohort to one exam mode. Omit to reach the whole cohort |
 
 **Segment definitions (authoritative — live state, not the raw status column):**
 | segment | who |
 |---|---|
-| `premium` | `status = SUBSCRIBED` **and** not expired |
-| `trial` | `status = ACTIVE`, never paid, within 14 days of signup |
+| `premium` | `status = SUBSCRIBED` **and** not expired (`premium_expires_at` null or in the future) |
+| `trial` | `status = ACTIVE` **and** `trial_ends_at` still in the future — i.e. the trial length configured for the exam they started on, **not a fixed 14 days**. Rows with no `trial_ends_at` (pre-dating the column) fall back to "created within 14 days and never paid", so legacy accounts resolve exactly as they always did |
 | `free` | everyone else |
 
+The three cohorts are **person-level**: they read the `user_auth` mirror, so "premium"
+means *holds premium somewhere*, not *holds premium in this exam*. `exam` is the other
+axis — see below.
+
 **Response 200**
+<!-- shape verified against code @c0a8fe5 — NOT captured on staging, see note -->
 ```json
-{ "segment": "premium", "matchedUsers": 312, "successCount": 298, "failureCount": 14 }
+{
+  "segment": "premium",
+  "exam": null,
+  "matchedUsers": 312,
+  "successCount": 298,
+  "failureCount": 14
+}
 ```
+
+> ⚠️ **Not captured, same reason as §2:** a real fan-out on staging dies at the FCM call
+> (500, `iam.serviceAccounts.getAccessToken`). Verified on the production credential path
+> on 2026-09-17 for the all-users case. The `exam` validation below **was** captured.
 `matchedUsers` = users in the cohort; `successCount`/`failureCount` are device-level
 (a matched user with no active device adds 0 to both).
+`exam` is **new** — the normalised slug that was actually applied, or `null` on the
+un-scoped call (which is every call that existed before this parameter).
 
 ⚠️ **Synchronous:** the HTTP call blocks until the whole cohort is sent (batched 50 at a
 time). For very large cohorts this can take a while — set a generous client timeout.
+
+### 3.1 Narrowing to one exam — `exam`
+
+```json
+{ "segment": "trial", "title": "Your Group-1 trial ends tomorrow",
+  "body": "Keep your access.", "type": "premium", "exam": "appsc-group-1" }
+```
+<!-- shape verified against code @c0a8fe5 — success body not capturable on staging (§3) -->
+```json
+{ "segment": "trial", "exam": "appsc-group-1", "matchedUsers": 48,
+  "successCount": 44, "failureCount": 4 }
+```
+
+**The unknown-slug rejection was captured** — it runs before the cohort is even resolved,
+so nothing is queried and nothing is sent. `POST /sme/notifications/segment` with
+`{"segment":"premium","title":"x","body":"y","type":"home","exam":"appsc-grp-1"}` on
+staging, 2026-09-21 (backend `f6329e6`):
+<!-- captured from staging 2026-09-21, backend f6329e6 -->
+```json
+{
+  "success": false,
+  "message": "Unknown exam \"appsc-grp-1\". Create it via POST /sme/exams first.",
+  "error": "Bad Request",
+  "statusCode": 400,
+  "timestamp": "2026-09-21T14:38:26.106Z",
+  "path": "/api/v1/sme/notifications/segment",
+  "method": "POST"
+}
+```
+
+- Matching is on **`user_profiles.active_exam_id`** — who the person *is* (their last
+  switcher / picker choice), not what they hold.
+- ⚠️ **`exam: "upsc-cse"` also matches every user who has never touched the picker or
+  the switcher** (`active_exam_id` NULL, or no profile row at all). An unset preference
+  means UPSC, and without that rule a UPSC-scoped send would reach almost nobody. Same
+  rule as `GET /sme/users?exam=`.
+- **Unknown slugs are now a 400** — `Unknown exam "<slug>". Create it via POST
+  /sme/exams first.` Previously a typo resolved to an empty cohort and reported a
+  successful send to nobody, which is indistinguishable from a real cohort that happens
+  to be empty.
+
+> 🔴 **FIXED 2026-09-21 — a `trial` or `premium` send scoped to `upsc-cse` used to hit
+> the wrong people.**
+>
+> The exam clause was merged into the cohort query by spreading it over the top-level
+> `where`. For the **default** exam that clause carries its own `OR` (the NULL rule
+> above), and the `premium` and `trial` cohorts each have an `OR` of their own — so the
+> exam clause **replaced** the cohort's `OR`, silently:
+>
+> - `segment:"trial"` + `exam:"upsc-cse"` lost the in-window test entirely, leaving
+>   `status = ACTIVE` — **which is every free account.** A "your trial is ending" push
+>   scoped to UPSC went to the entire free base.
+> - `segment:"premium"` + `exam:"upsc-cse"` lost the "not expired" half and also
+>   reached lapsed subscribers.
+>
+> Both are correct from this release (the clause is composed with `AND`). `free` was
+> never affected, and no *un-scoped* send (`exam` omitted) was ever affected.
+> **If you sent a scoped premium/trial push before this release, its `matchedUsers` was
+> wrong — do not use it as a cohort size.** Non-default exams (`appsc-group-1`, …) were
+> also unaffected: their clause has no `OR`.
+
+Everything else about the three segments is unchanged.
 
 ---
 
@@ -306,20 +471,75 @@ Two **separate** mechanisms; do not conflate them:
 
 **A) Topic subscription (used by `broadcast`)** — `topic.service.ts → resolveTopicsForUser()`
 - Server computes each user's desired topics from their profile: `all_users` +
-  `tier_premium`/`tier_free` + `aspirant_*` + `target_<year>` + `medium_<lang>`.
-- Tier rule here: `SUBSCRIBED || ACTIVE → tier_premium`, else `tier_free`
-  (**trial users land in `tier_premium`**).
+  `tier_premium`/`tier_free` + **`exam_<slug>`** + `aspirant_*` + `target_<year>` +
+  `medium_<lang>`.
+- Tier rule here: **paid and current, or inside the free-trial window → `tier_premium`**,
+  else `tier_free` (**trial users land in `tier_premium`**). Corrected 2026-09-21: this
+  used to read `SUBSCRIBED || ACTIVE`, and `ACTIVE` is the default status on *every* free
+  account — so a lapsed trial, and anyone who had not opened the app since their trial
+  ended, were both being pushed as `tier_premium`.
+- **Exactly one `exam_<slug>` per user, always present.** It is the user's
+  `active_exam_id`; a NULL value — or no profile row at all — yields **`exam_upsc-cse`**,
+  because absence means UPSC everywhere in this API and those users were genuinely served
+  UPSC. Hyphens are preserved (`exam_appsc-group-1`); this topic is deliberately not
+  passed through the `aspirant_*`/`medium_*` normaliser, which would rewrite it to
+  `exam_appsc_group_1`.
+- The topic set is **person-level, not per-exam**, apart from that one key: a device
+  subscribes to topics, not to an exam, so `tier_premium` still means "holds premium
+  somewhere".
 - The **app applies it**: on each dashboard load it fetches `GET /notifications/topics`
   and subscribes/unsubscribes via FCM to match. No app release is needed to change
-  segments — edit `resolveTopicsForUser` and clients pick it up on next sync.
+  segments — edit `resolveTopicsForUser` and clients pick it up on next sync. That is
+  how `exam_<slug>` reaches the installed base, and also why its coverage grows as users
+  open the app rather than arriving complete on deploy day (§2.1).
+
+**Example — `GET /notifications/topics` (JWT, app-facing):**
+<!-- captured from staging 2026-09-21, backend f6329e6 -->
+Verbatim, for a real staging account whose `active_exam_id` is `appsc-group-1`:
+
+```json
+{ "topics": ["all_users", "tier_premium", "exam_appsc-group-1",
+             "aspirant_full_time", "medium_english"] }
+```
+
+> **Two things that capture settles:**
+>
+> * **`exam_appsc-group-1` is present, hyphen intact, sitting third** — this is the live
+>   proof that the new topic reaches an installed client with no app release, purely by
+>   re-syncing this endpoint.
+> * **There is no `target_*` topic**, because this account's `user_profiles.target_year`
+>   is `null`. `aspirant_*`, `target_*` and `medium_*` are each emitted **only when their
+>   profile column is set**, so the list length varies per user — `all_users`,
+>   `tier_*` and `exam_*` are the only three that are always present. A client that
+>   assumes a fixed six-topic list will mis-diff its subscriptions.
+>
+> ✅ **`tier_premium` now honours the exam's own trial length** — fixed in this release,
+> together with the SME `isPremium` field it shares a helper with
+> ([`SME_PORTAL_API.md` §1.1](./SME_PORTAL_API.md)). *Before 2026-09-21*, an `ACTIVE`
+> user whose `trial_ends_at` was NULL had their window computed as `created_at + 14 days`
+> whatever the exam's `trialDays` was, so on APPSC Group 1 (trial **0** days) a lapsed
+> trialist stayed on `tier_premium` — and received premium-audience pushes — for the
+> first 14 days after signup. Devices pick the correction up on their next
+> `GET /notifications/topics` sync; no app release is involved.
+>
+> The remaining `tier_premium` caveat is the **intended** one, not a bug: it still
+> includes users in a *live* trial, while the `premium` **segment** (§3) does not.
 
 **B) Segment fan-out (used by `segment`)** — `sme-user.service.ts → resolveSegment()`
 - No topics. A live DB query selects the cohort (see §3 table), then per-user send.
 
 ⚠️ **They disagree on trial:** the `tier_premium` *topic* includes trial users; the
 `premium` *segment* does not. **For accurate premium/trial/free targeting, use the
-`segment` endpoint (§3).** There is currently **no SME endpoint** that pushes the
-`tier_premium`/`tier_free` topics directly — `broadcast` only hits `all_users`.
+`segment` endpoint (§3).** There is still **no SME endpoint** that pushes the
+`tier_premium`/`tier_free` topics directly — `broadcast` addresses `all_users` or, with
+`exam`, `exam_<slug>`, and nothing else.
+
+⚠️ **They also count the exam differently, and it matters.** `broadcast?exam=` is a
+topic send: it reaches devices that have *synced since this shipped*. `segment?exam=` is
+a live query: it reaches every matching user's registered devices, synced or not. For
+anything time-critical in a non-UPSC exam, prefer `segment` until topic coverage has had
+a few days to fill in. Both resolve NULL `active_exam_id` to `upsc-cse`, so the two agree
+on *who* belongs to an exam.
 
 ---
 
@@ -328,6 +548,18 @@ Two **separate** mechanisms; do not conflate them:
 - **Permission + dashboard:** topic sends (`broadcast`) only reach devices that opened
   the dashboard with permission granted. Per-user (`/notify`) and `segment` sends reach
   any device with a registered active token (also requires permission).
+- **`exam_<slug>` coverage grows, it does not arrive complete.** A device joins its exam
+  topic on its next dashboard sync of `GET /notifications/topics`. No app release is
+  needed, but an exam broadcast in the first days after rollout reaches a subset (§2.1).
+  `all_users` is unaffected.
+- **`exam` is validated on both send routes** — unknown slug → **400**
+  `Unknown exam "<slug>". Create it via POST /sme/exams first.` Neither route will
+  quietly send to nobody any more.
+- **`exam` is the "who they ARE" axis** (`active_exam_id`), not "what they HOLD"
+  (`user_exam_entitlements`). `exam: "upsc-cse"` additionally matches every user with no
+  stored preference; the tier cohorts stay person-level.
+- **A scoped `premium`/`trial` send before 2026-09-21 targeted the wrong cohort** (§3.1)
+  — treat any `matchedUsers` recorded from one as meaningless.
 - **iOS foreground:** notification-type messages are not auto-shown while the app is in
   the foreground (handled by the in-app feed instead). Backgrounded/closed = shown.
 - **Best-effort:** `successCount` ≠ delivered-and-seen. No read receipts.
@@ -346,8 +578,11 @@ Two **separate** mechanisms; do not conflate them:
 1. Store `API_KEY_SECRET` **server-side only** — never ship it to a browser/client.
 2. **One user:** find the user via `GET /sme/users?search=...` → take `id` →
    `POST /sme/users/:id/notify`.
-3. **Everyone:** `POST /sme/notifications/broadcast`.
-4. **Cohort:** `POST /sme/notifications/segment` with `segment: premium|trial|free`.
+3. **Everyone:** `POST /sme/notifications/broadcast`. **One exam:** the same call with
+   `exam: "<slug>"`; read `topic` back from the response and show it as the audience.
+4. **Cohort:** `POST /sme/notifications/segment` with `segment: premium|trial|free`,
+   optionally `exam`. Offer the exam picker from `GET /sme/exams` — a free-text slug
+   field will earn 400s.
 5. Pick a `type` from §4.2 (default `home`); pass `id` when the type needs it, and
    `params` for the few that take extra arguments (§4.1). Validation is strict —
    an over-cap or non-string `params` is a **400**, not a silently dropped field.
@@ -362,7 +597,9 @@ Two **separate** mechanisms; do not conflate them:
 | Goal | Endpoint | Audience source | Returns |
 |---|---|---|---|
 | One user | `POST /sme/users/:id/notify` | that user's devices | `{successCount, failureCount}` |
-| Everyone | `POST /sme/notifications/broadcast` | FCM `all_users` topic | `{messageId}` |
-| Premium / trial / free | `POST /sme/notifications/segment` | live DB query | `{segment, matchedUsers, successCount, failureCount}` |
+| Everyone | `POST /sme/notifications/broadcast` | FCM `all_users` topic | `{messageId, topic}` |
+| One exam mode | `POST /sme/notifications/broadcast` + `exam` | FCM `exam_<slug>` topic | `{messageId, topic}` |
+| Premium / trial / free | `POST /sme/notifications/segment` | live DB query | `{segment, exam, matchedUsers, successCount, failureCount}` |
+| …narrowed to one exam | `POST /sme/notifications/segment` + `exam` | live DB query on `active_exam_id` | as above, `exam` echoed |
 
 All require `x-api-key: <API_KEY_SECRET>`. Prod base: `https://app.stanzasoft.ai/api/v1`.

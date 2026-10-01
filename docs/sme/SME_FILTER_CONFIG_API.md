@@ -1,5 +1,7 @@
 # SME — Subject Filter Config API Guide
 
+> Changed 2026-09-21 — exam-scoping gaps closed (existing contracts).
+
 Reference for the **SME portal** to manage what the app's PYQ **Prelims** and **Mains**
 subject filters look like: per-subject **display name**, **icon**, **visibility** and
 **sort position** — plus flipping a mains subject between **Optional** and **GS**. Same
@@ -31,13 +33,19 @@ team builds the UI.
 ## 0. The mental model (read this first)
 
 Defaults are **auto-derived from the live question data** (every subject that has active
-questions gets an entry, with an auto-matched icon and name). SME entries are **overrides**
+questions gets an entry, with an auto-matched icon and name). **The derivation runs per
+exam** — the subject scan is scoped by `examScopeFilter(exam)`, so `?exam=appsc-group-1`
+yields APPSC's own subject list (its own rows plus any tagged `"*"`), not UPSC's.
+SME entries are **overrides**
 layered on top — you only store what you change, and clearing an override falls back to
 the default. The merged result is served to the apps on the public `GET /mains/filters`
 and `GET /pyq/filters` endpoints (new `subjectsMeta` field), so the portal never has to
 touch the apps.
 
-**Mains "Optional" subjects — what `isOptional` means:** UPSC Mains has two kinds of
+**Mains "Optional" subjects — what `isOptional` means:** the GS/Optional split described
+below is **UPSC's** paper structure; another exam's mains structure is whatever
+`mains_papers` rows exist for it, and its subject list is derived from those rows alone.
+UPSC Mains has two kinds of
 papers — the **GS papers** everyone writes (GS Paper 1–4) and **Optional-subject papers**
 (Sociology, PSIR, Law, …; each aspirant picks one). Every mains question row carries an
 `isOptional` flag for this. In the app, the Mains screen has an **"Optional" switch**
@@ -78,6 +86,7 @@ subjects ARE included here (the portal must see everything); the public endpoint
 ```json
 {
   "examType": "mains",
+  "exam": "upsc-cse",
   "validIconKeys": ["sme_art", "…", "sme_science_technology"],
   "entries": [
     {
@@ -129,6 +138,7 @@ Response — the updated entry:
 ```json
 {
   "examType": "mains",
+  "exam": "upsc-cse",
   "subject": "Law Optional",
   "isOptional": true,
   "effective": { "displayName": "Law", "iconKey": "sme_polity", "hidden": false, "sortOrder": null },
@@ -150,6 +160,7 @@ Body: `{ "isOptional": true | false }`
 ```json
 // POST /sme/filter-config/mains/History%20Optional/optional  { "isOptional": false }
 {
+  "exam": "upsc-cse",
   "subject": "History Optional",
   "isOptional": false,
   "updatedCount": 546,

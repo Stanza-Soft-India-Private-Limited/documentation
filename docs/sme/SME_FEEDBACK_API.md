@@ -1,5 +1,8 @@
 # SME Feedback API
 
+> Changed 2026-09-21 — stale-text pass (telemetry live in 2.0, version ladder, links). Exam-dimension changes follow in [WHAT_CHANGED_2026-09-21.md](./WHAT_CHANGED_2026-09-21.md).
+> Changed 2026-09-21 — per-exam broadcast, validated segment exam (+ fix), survey targetExams, feedback ?exam= (see [WHAT_CHANGED_2026-09-21.md](./WHAT_CHANGED_2026-09-21.md)).
+
 > ## ⛔ BEFORE YOU WRITE ANY UI CODE — INVOKE THE `frontend-design` SKILL
 > If you are a Claude/coding session building screens on this API, your **first action** is
 > to invoke the **`frontend-design`** skill (`/frontend-design`). Do this **even if no one
@@ -102,28 +105,86 @@ paid), `trial` (in-window trial), `free` (everyone else).
 Query params (all optional): `type` (ISSUE|FEATURE), `status`, `categoryKey`,
 `platform` (ios|android|web), `tier` (premium|trial|free), `contextType`,
 `userId`, `search` (substring of the free text), `from` / `to` (IST dates
-`YYYY-MM-DD`, inclusive), `page`, `limit` (default 20, max 100).
+`YYYY-MM-DD`, inclusive), **`exam`**, `page`, `limit` (default 20, max 100).
+
+| `exam` | selects |
+|---|---|
+| a slug, e.g. `appsc-group-1` | reports **filed from** that exam mode (`feedback_reports.exam_id`, stamped from `req.exam` at submit) |
+| `none` | the rows whose `exam_id` is **NULL** — everything filed before 2026-09-21 |
+| omitted | everything |
+
+- **Unknown slug → 400** `Unknown exam "<slug>". Create it via POST /sme/exams first.`
+  (The column has no FK, so a typo would otherwise return an empty page that reads as
+  "this exam has no complaints".)
+- `tier` remains **person-level** (the `user_auth` premium mirror), not per-exam. The two
+  filters compose but answer different questions.
+
+> 🔴 **NULL here does NOT mean `upsc-cse` — this is the opposite of the `active_exam_id`
+> rule used everywhere else.** `feedback_reports.exam_id` is stamped going *forward*
+> only and historical rows were deliberately not backfilled, so a NULL means **"we did
+> not record it"**, not "UPSC". Consequences to build around:
+> - `?exam=upsc-cse` **excludes** every pre-2026-09-21 report.
+> - `?exam=none` selects exactly that unrecorded history, and nothing else.
+> - The per-exam counts therefore start at the deploy and climb; they are a **floor**,
+>   not a share of all time. Do not draw the cliff without saying so.
 
 **Response** (raw — this whole object is the body; the `data` key is this endpoint's own
 pagination wrapper, **not** a global envelope):
 
+<!-- captured from staging 2026-09-21, backend f6329e6 -->
+`GET /sme/feedback/reports?limit=2` → **200**, verbatim. `GET
+/sme/feedback/reports?exam=none&limit=1` returns the same body:
+
+```json
+{ "data": [], "total": 0, "page": 1, "limit": 2, "hasMore": false }
+```
+
+> 🔎 **Nobody has ever filed a report on staging** (`total: 0` both with and without
+> `?exam=`), so no populated row could be captured. The **envelope** above is live —
+> `{ data, total, page, limit, hasMore }`, the same one `/sme/users` and `/sme/orders`
+> use, and *not* the `{ data, meta }` envelope of `/sme/content/*`. The row shape below
+> is verified against the DTO.
+
+**Row shape** (from code):
+<!-- shape verified against code @c0a8fe5 — staging holds no reports, see note above -->
 ```jsonc
-{
-  "data": [ { "id": "…", "userId": "…", "type": "ISSUE", "status": "OPEN",
-              "categoryKey": "…", "text": "…", "contextType": "…", "contextId": "…",
-              "platform": "ios", "appVersion": "1.7", "userTier": "trial",
-              "replyCount": 0, "createdAt": "…" } ],
-  "total": 0, "page": 1, "limit": 20, "hasMore": false
-}
+{ "id": "…", "userId": "…", "type": "ISSUE", "status": "OPEN",
+  "categoryKey": "…", "text": "…", "contextType": "…", "contextId": "…",
+  "platform": "ios", "appVersion": "1.7", "userTier": "trial",
+  "examId": "appsc-group-1",   // NEW — nullable; null = filed before 2026-09-21
+  "replyCount": 0, "createdAt": "…" }
 ```
 
 ### Detail — `GET /sme/feedback/reports/:id`
 
-Returns the full report + `replies` (ascending) + a resolved **context**:
+Returns the full report (including `examId`) + `replies` (ascending) + a resolved
+**context**:
 
-```json
-{ "context": { "resolved": true, "kind": "PYQ_QUESTION", "snippet": "…", "subject": "Polity" } }
+<!-- shape verified against code @c0a8fe5 — staging holds no reports, so no detail read was possible -->
+```jsonc
+{
+  "examId": "appsc-group-1",          // which exam the USER was in when they filed it
+  "context": {
+    "resolved": true, "kind": "PYQ_QUESTION", "snippet": "…", "subject": "Polity",
+    "examIds": ["*"]                  // which exams the CONTENT belongs to
+  }
+}
 ```
+
+**`context.examIds` is a different axis from `examId`** and the two can legitimately
+disagree — an APPSC aspirant reporting a `*`-tagged reel gives
+`examId: "appsc-group-1"` with `examIds: ["*"]`. Treat a mismatch as information, not a
+bug.
+
+`context.examIds` is **omitted, not `[]`**, when there are no tags to report. Read it
+with a presence check, never `.length`:
+
+| `contextType` | `context.examIds` |
+|---|---|
+| `PYQ_QUESTION`, `MAINS_QUESTION`, `CONTENT_DOC`, `REEL` | the content row's tags, e.g. `["appsc-group-1"]` or `["*"]` |
+| `SIMULATION_QUESTION` | **absent** — `simulation_questions` carries no tags of its own; the exam lives on the parent simulation. Read it from `GET /sme/content/simulations/:id` if you need it |
+| `APP_ERROR` | absent — resolves to `{ resolved: true, kind: "app_error" }` and nothing else |
+| unresolved / deleted content | absent (`{ resolved: false }`) |
 
 If the referenced content was deleted (or there was no context), `context` is
 `{ "resolved": false }` — never a 500.
@@ -145,8 +206,14 @@ never rolls back the reply.
 
 **Questions it answers.** "What are users complaining about, and about what part of the
 product?" (`categoryKey` + `contextType`/`contextId`) · "Is this coming from paying users?"
-(`userTier`) · "Is it a build-specific problem?" (`appVersion` + `platform`) · "How long has
-this person been waiting?" (`createdAt` + `replyCount`).
+(`userTier`) · "Is it a build-specific problem?" (`appVersion` + `platform`) · "Is this exam
+launch going badly?" (`?exam=` + `examId`) · "How long has this person been waiting?"
+(`createdAt` + `replyCount`).
+
+An exam filter chip is worth having, but give it a **"not recorded"** option wired to
+`?exam=none` and keep it out of any all-time percentage: those rows are not UPSC, they are
+unknown, and a per-exam count that silently drops them will read as a sudden surge of
+complaints on deploy day.
 
 **The decision it drives.** Reply now, escalate, or close. Secondarily — and this is the part
 teams forget — **which product area to fix**, because `categoryKey` and `contextType`
@@ -171,11 +238,13 @@ letting the server reject it.
 
 #### What it actually returns today — measured 2026-07-23
 
-`GET /sme/feedback/reports` → **`total: 0`**. The inbox is genuinely empty: the module shipped
-on 2026-07-22 and the mobile build that submits reports has not been released. This is "no
-data yet", not "no complaints" — and it is the state the screen will be in on the day it is
-handed over. Design the empty state as a real state with that sentence in it, and make sure
-the filter chips and pagination degrade gracefully at zero rows.
+`GET /sme/feedback/reports` → **`total: 0`**. The inbox was genuinely empty at that
+measurement: the module shipped on 2026-07-22 and no released build submitted reports yet. App
+**2.0** (released 2026-09-17) is the first build expected to, so re-measure before repeating
+the zero — and even once it fills, volume tracks 2.0 adoption, since older builds submit
+nothing. A low count is "partly measured", not "no complaints". Design the empty state as a
+real state with that sentence in it, and make sure the filter chips and pagination degrade
+gracefully at zero rows.
 
 ---
 
@@ -239,8 +308,17 @@ environment that served that request, so the forward short-circuited before it w
 **100% of chat ratings collected so far have failed to reach Dify.** This is a real,
 outstanding production configuration gap, not a sample artefact — it is reported here rather
 than smoothed over, and it is exactly the case `difyForwardFailures` exists to surface. It
-also means `byRating` is currently the only usable field on this endpoint, and `topChips` will
-stay empty until the app release that collects chips ships.
+also means `byRating` was, at the time of that measurement, the only usable field on this
+endpoint.
+
+**On `topChips`:** the backend write path is **live and always has been** —
+`ChatFeedbackService.submit` persists `dto.chips` straight onto
+`chat_message_feedback.chips` before it forwards anything to Dify, so `topChips` is fed by our
+own table and does **not** depend on the Dify forward succeeding. Whether it fills up is purely
+a question of the client sending a non-empty `chips[]` on a thumbs-down. That is **expected from
+app 2.0** (released 2026-09-17) and cannot be proven from the backend — **verify in the data**:
+`SELECT count(*) FROM chat_message_feedback WHERE cardinality(chips) > 0;`. Until that returns
+non-zero, treat an empty `topChips` as unconfirmed client coverage, not as a broken endpoint.
 
 ---
 
@@ -289,6 +367,7 @@ Question types: `single_choice`, `multi_choice`, `rating_1_5`, `nps_0_10`,
     { "type": "nps_0_10", "text": "How likely…" }
   ],
   "targetTiers": ["premium"], "targetPlatforms": ["ios"], "targetAspirantTypes": ["FULL_TIME"],
+  "targetExams": ["appsc-group-1"],
   "priority": 10, "startAt": "2026-08-01T00:00:00Z", "endAt": "2026-08-31T00:00:00Z"
 }
 ```
@@ -296,6 +375,74 @@ Question types: `single_choice`, `multi_choice`, `rating_1_5`, `nps_0_10`,
 Created `DRAFT`. **Question ids are assigned server-side** (any id you send is
 ignored) — the returned `questions` carry the stable ids used in results/CSV.
 Empty `target*` arrays = everyone.
+
+<!-- captured from staging 2026-09-21, backend f6329e6 -->
+**Response `201`**, verbatim — the draft created on staging for the captures in §4
+(`targetExams: ["appsc-group-1"]` was the only `target*` array sent):
+
+```json
+{
+  "id": "6c16b3a6-5b2d-4755-8340-625c098af358",
+  "title": "SME-HANDOFF-SMOKE — docs capture",
+  "description": "Draft created 2026-09-21 to capture response shapes for the SME docs handoff. Never activated. Safe to delete.",
+  "status": "DRAFT",
+  "questions": [
+    {
+      "id": "684c694d-c2e1-4be3-99c0-830bf2aaa25f",
+      "text": "Smoke question?",
+      "type": "single_choice",
+      "options": [{ "key": "a", "label": "A" }, { "key": "b", "label": "B" }]
+    },
+    {
+      "id": "37415e64-f4aa-40e6-bb10-cf78c1f57384",
+      "text": "How likely are you to recommend PrepMonkey?",
+      "type": "nps_0_10"
+    }
+  ],
+  "targetTiers": [],
+  "targetPlatforms": [],
+  "targetAspirantTypes": [],
+  "targetExams": ["appsc-group-1"],
+  "priority": 1,
+  "startAt": null,
+  "endAt": null,
+  "activatedAt": null,
+  "closedAt": null,
+  "createdAt": "2026-09-21T14:56:31.531Z",
+  "updatedAt": "2026-09-21T14:56:31.531Z"
+}
+```
+
+> **The three `target*` arrays that were never sent come back as `[]`, not `null` or
+> absent** — so "everyone" is an empty array on read as well as on write, and the portal
+> can bind a multi-select straight to them. A non-choice question (`nps_0_10`) carries
+> **no `options` key at all** rather than an empty array.
+
+That same survey on `GET /sme/surveys`, verbatim:
+
+```json
+[{ "id": "6c16b3a6-5b2d-4755-8340-625c098af358",
+   "title": "SME-HANDOFF-SMOKE — docs capture",
+   "status": "DRAFT", "priority": 1, "questionCount": 2, "responseCount": 0,
+   "activatedAt": null, "createdAt": "2026-09-21T14:56:31.531Z" }]
+```
+
+**`targetExams`** is the exam cohort, and behaves exactly like the other `target*`
+arrays — **empty or omitted = every exam**, which is what every survey authored before
+2026-09-21 carries, so none of them changed audience.
+
+- Every slug is **checked against the exam catalogue on write**: unknown → **400**
+  `Unknown exam "<slug>". Create it via POST /sme/exams first.` Slugs are trimmed,
+  lower-cased and de-duplicated before storage.
+- **`"*"` is rejected** with a **400**: `targetExams does not accept "*" — leave the
+  array empty to target every exam.` An empty array already means everyone, and a second
+  spelling of it would have to be handled at every read site forever. (This differs from
+  content `examIds`, where `*` *is* the sentinel — do not carry that habit over.)
+- ⚠️ **`upsc-cse` in the list also matches every user who has never used the exam picker
+  or the home switcher** (`active_exam_id` NULL, or no profile row). Without that, a
+  UPSC-targeted survey would reach only the minority who have used the switcher.
+- `targetTiers` stays **person-level** (the `user_auth` premium mirror): `premium` means
+  holds premium *somewhere*, not in the targeted exam.
 
 ### List / detail
 
@@ -306,10 +453,16 @@ dismissed }`.
 
 ### Edit — `PATCH /sme/surveys/:id`
 
-`title`, `description`, `priority`, `endAt`, and the `target*` arrays are
-editable at any time. **`questions` are structurally frozen once a survey is
-`ACTIVE`** (`SurveyStructuralEditBlocked`, 409) — fix by cloning into a new
+`title`, `description`, `priority`, `endAt`, and the `target*` arrays — `targetExams`
+included — are editable at any time. **`questions` are structurally frozen once a survey
+is `ACTIVE`** (`SurveyStructuralEditBlocked`, 409) — fix by cloning into a new
 survey. Questions are editable while `DRAFT`.
+
+`targetExams` on `PATCH` **replaces the whole list** (same validation as create: known
+slugs only, no `"*"`). Send `[]` to widen the survey back to every exam; **omit the key**
+to leave the current list alone. Changing it re-scopes who is *offered* the survey from
+that moment on — it does not retract it from anyone who already answered, and it does not
+re-attribute existing responses.
 
 ### Lifecycle
 
@@ -341,6 +494,19 @@ Both are per-user JWT endpoints (not cached — cohort + response state are
 per-user) and return the same survey shape `{ id, title, description,
 questions }`; `/open` additionally includes `activatedAt` for inbox sorting.
 
+**Both now honour `targetExams`** (added 2026-09-21). A survey whose `targetExams` is
+non-empty is offered only when the request's exam is in that list; the request's exam is
+`X-Exam` / `?exam=`, and **an app that sends neither is treated as `upsc-cse`**, so older
+builds keep seeing UPSC-targeted surveys. An empty `targetExams` means every exam, so the
+response shape and the set of surveys returned are unchanged for all existing data.
+
+⚠️ **Submit and dismiss are deliberately NOT exam-filtered.**
+`POST /feedback/surveys/:id/responses` and `…/dismiss` re-check eligibility (so a client
+cannot post to a survey it was never offered) but skip the exam test. The exam on a
+request is just the mode the app happens to be showing; a user who was legitimately
+offered a survey and then tapped the exam switcher must still be able to answer or
+dismiss it. The exam filter governs what gets **offered**, nothing else.
+
 ### Announce — `POST /sme/surveys/:id/notify`
 
 Body `{ title, body }`. Fans out a `survey` deep-link to the survey's cohort,
@@ -348,7 +514,12 @@ Body `{ title, body }`. Fans out a `survey` deep-link to the survey's cohort,
 per 50. Returns `{ surveyId, matchedUsers, successCount, failureCount }`.
 Audited.
 
-### Results — `GET /sme/surveys/:id/results?breakdown=tier|platform`
+**The cohort is the survey's own `target*` filters, `targetExams` included** (since
+2026-09-21) — the push audience and the in-app eligibility now agree. A survey authored
+before that field existed has `targetExams: []` and notifies exactly who it always did.
+`upsc-cse` in the list also matches users with no stored exam preference.
+
+### Results — `GET /sme/surveys/:id/results?breakdown=tier|platform|exam`
 
 Per question:
 - choice → `options: [{ key, label, count, pct }]`
@@ -358,12 +529,132 @@ Per question:
 
 `breakdown` adds a per-group `breakdown.groups` for non-text questions.
 
+**`breakdown=exam`** (new) groups by the respondent's exam, and the response gains three
+keys **only for this breakdown** — a `tier`/`platform` response is byte-identical to
+before:
+
+<!-- captured from staging 2026-09-21, backend f6329e6 -->
+`GET /sme/surveys/6c16b3a6-5b2d-4755-8340-625c098af358/results?breakdown=exam` —
+verbatim. The survey is a two-question DRAFT created on staging for this capture
+(`SME-HANDOFF-SMOKE — docs capture`, never activated) and has **zero responses**, so this
+is the **empty-state** body for both question types at once:
+
+```json
+{
+  "surveyId": "6c16b3a6-5b2d-4755-8340-625c098af358",
+  "totalResponses": 0,
+  "results": [
+    {
+      "question": {
+        "id": "684c694d-c2e1-4be3-99c0-830bf2aaa25f",
+        "text": "Smoke question?",
+        "type": "single_choice",
+        "options": [{ "key": "a", "label": "A" }, { "key": "b", "label": "B" }]
+      },
+      "type": "single_choice",
+      "answered": 0,
+      "options": [
+        { "key": "a", "label": "A", "count": 0, "pct": 0 },
+        { "key": "b", "label": "B", "count": 0, "pct": 0 }
+      ],
+      "breakdown": { "by": "exam", "groups": {} }
+    },
+    {
+      "question": {
+        "id": "37415e64-f4aa-40e6-bb10-cf78c1f57384",
+        "text": "How likely are you to recommend PrepMonkey?",
+        "type": "nps_0_10"
+      },
+      "type": "nps_0_10",
+      "answered": 0,
+      "npsScore": 0,
+      "promoters": 0,
+      "passives": 0,
+      "detractors": 0,
+      "distribution": { "0": 0, "1": 0, "2": 0, "3": 0, "4": 0, "5": 0, "6": 0, "7": 0, "8": 0, "9": 0, "10": 0 },
+      "breakdown": { "by": "exam", "groups": {} }
+    }
+  ],
+  "examNullCount": 0,
+  "examNullBucketedAs": "upsc-cse",
+  "examNote": "0 of 0 respondents have no stored exam preference and are counted under \"upsc-cse\", which is the exam they were served. Exam is read from the profile as it stands today, not snapshotted at answer time, so a respondent who has since switched exams is counted under their current one."
+}
+```
+
+> **Three empty-state traps that capture exposes:**
+>
+> * **`breakdown.groups` is `{}`, not absent and not `null`.** Iterate its keys; do not
+>   test for the key's presence.
+> * **`npsScore: 0` on zero responses.** Unlike `conversionPct` in the analytics API,
+>   this one does **not** use `null` for "no denominator" — a brand-new survey scores
+>   the same as a genuinely neutral one. **Gate the NPS tile on `answered > 0`**, never
+>   on `npsScore`.
+> * **`examNote` is still populated at zero** ("0 of 0 respondents…"). It is ready-made
+>   copy, not a signal that anything happened; render it beside the chart regardless.
+>
+> Each result entry carries the **full `question` object** (id, text, type and, for
+> choice questions, `options`) alongside a top-level `type` — so the results payload is
+> self-describing and the portal need not join back to the survey detail.
+
+> ⚠️ **Exam on a response is RETRO-ATTRIBUTED, not a snapshot.** `survey_responses`
+> stores `userTier` and `platform` as they were *at submit time*, but it stores **no
+> exam**. `breakdown=exam` therefore reads the respondent's **current**
+> `user_profiles.active_exam_id`: somebody who switched exams after answering is counted
+> under the exam they are on **today**, and the numbers can move between two reads of the
+> same closed survey. A NULL / missing profile is bucketed as `upsc-cse` (the exam that
+> user was actually served) and **`examNullCount` is how many rows that was** — surface
+> it, or the UPSC bar is an unfalsifiable majority. `examNote` is ready-made copy for
+> that caveat.
+
 ### Raw responses / CSV
 
-`GET /sme/surveys/:id/responses?page&limit` — paginated raw answered rows.
+`GET /sme/surveys/:id/responses?page&limit` — paginated raw answered rows. **Every row
+now carries `exam`**, with the same retro-attribution as above (current profile value,
+NULL → `upsc-cse` — here folded in silently, there is no per-row "unknown" marker).
+
+<!-- captured from staging 2026-09-21, backend f6329e6 -->
+`GET /sme/surveys/6c16b3a6-5b2d-4755-8340-625c098af358/responses?page=1&limit=50` →
+**200**, verbatim (the smoke survey has no responses):
+
+```json
+{ "data": [], "total": 0, "page": 1, "limit": 50 }
+```
+
+> **Note the envelope: `{ data, total, page, limit }` with no `hasMore`** — a third
+> pagination contract, different from both `/sme/users` (`hasMore`) and `/sme/content/*`
+> (`meta`). Compute "is there another page" from `page * limit < total`.
+
+**Row shape** (from code — staging has no survey responses to capture):
+<!-- shape verified against code @c0a8fe5 — no responses exist on staging -->
+```jsonc
+{ "id": "…", "userId": "…", "userTier": "trial", "platform": "ios",
+  "aspirantType": "FULL_TIME", "answeredAt": "…", "answers": [],
+  "exam": "appsc-group-1" }
+```
+
 `GET /sme/surveys/:id/responses/export.csv` — RFC-4180 CSV (UTF-8 + BOM), one
 column per question, capped at 50k rows. This is a **raw file download** (no
-envelope).
+envelope). It gains **`exam` as the LAST column**, after the question columns —
+appended deliberately so no existing column shifts for a sheet or script that reads by
+position:
+
+```
+responseId,userId,userTier,platform,aspirantType,answeredAt,<question 1>,…,<question n>,exam
+```
+
+<!-- captured from staging 2026-09-21, backend f6329e6 -->
+The header line of a real export, verbatim
+(`GET /sme/surveys/6c16b3a6-5b2d-4755-8340-625c098af358/responses/export.csv`; the two
+question columns are the smoke survey's own question **text**, and the file begins with a
+UTF-8 BOM):
+
+```
+responseId,userId,userTier,platform,aspirantType,answeredAt,Smoke question?,How likely are you to recommend PrepMonkey?,exam
+```
+
+> **The question columns are headed by the question text, not by question id** — so a
+> script must not key off them, and a survey whose question text contains a comma or a
+> quote relies on RFC-4180 quoting to stay parseable. `exam` is confirmed **last**.
 
 ### How to use this data
 
@@ -378,8 +669,11 @@ Results side: whatever the survey was for. The NPS and rating aggregates are pre
 
 **What a good visualisation is.** Two distinct modes, sharing nothing but the survey id.
 *Authoring:* a linear composer — question list with type, text and options — plus a targeting
-panel (`targetTiers` / `targetPlatforms` / `targetAspirantTypes`, where **empty means
-everyone**; say that in the field, because an empty multi-select reads as "nobody"). The
+panel (`targetTiers` / `targetPlatforms` / `targetAspirantTypes` / `targetExams`, where
+**empty means everyone**; say that in the field, because an empty multi-select reads as
+"nobody"). Populate the exam control from `GET /sme/exams` rather than free text — unknown
+slugs and `"*"` are both 400s — and note beside it that UPSC also captures everyone who has
+never picked an exam. The
 DRAFT → ACTIVE step must be an explicit, deliberate confirmation that states the consequence:
 *questions can no longer be edited*. That is enforced server-side with a 409
 (`SurveyStructuralEditBlocked`) and the fix is cloning into a new survey, which is expensive
@@ -387,8 +681,12 @@ to discover by accident.
 *Results:* per question, the shape the data already has — choice questions as ranked bars with
 `pct`, `rating_1_5` as a distribution with the `average` called out, `nps_0_10` as the
 standard promoters/passives/detractors split with `npsScore` as the headline, free text as a
-readable list (capped at 500, so say when it is truncated). `breakdown=tier|platform` turns
-each of those into small multiples — offer it as a toggle, not a separate page.
+readable list (capped at 500, so say when it is truncated). `breakdown=tier|platform|exam`
+turns each of those into small multiples — offer it as a toggle, not a separate page. On the
+`exam` toggle, render `examNote` (or your own wording of it) next to the chart: the numbers
+are retro-attributed from today's profile and `examNullCount` of them are in the `upsc-cse`
+bucket only because nothing was recorded. Do not let an operator screenshot that bar without
+the caveat attached.
 
 **The action that follows.** Activate, `POST …/notify` to announce it (the fan-out already
 excludes users who answered or permanently dismissed — do not filter again client-side), then
@@ -448,11 +746,12 @@ the action): `FEEDBACK_REPORT_STATUS`, `FEEDBACK_REPORT_REPLY`,
   server-side config gap, not a portal bug — see §2.
 - **Tier** everywhere is PostgreSQL-derived, not the graph.
 - **IST** — the report list `from`/`to` are IST calendar dates.
-- **Nothing here is populated at scale yet.** As of 2026-07-23: 0 reports, 1 chat rating
-  (which failed to forward), 3 smoke-test surveys with 2 responses between them. The report
-  and chip data depend on a mobile release that has not shipped. Build the empty states as
-  first-class states — they are what the portal team will see on day one, and an empty
-  screen that says nothing will be reported as a broken integration.
+- **Volume was near zero when this was written.** As of 2026-07-23: 0 reports, 1 chat rating
+  (which failed to forward), 3 smoke-test surveys with 2 responses between them. Those counts
+  are months old — re-measure before quoting them. Report and chip volume comes from the app,
+  and app **2.0** (released 2026-09-17) is the first build expected to supply it, so coverage
+  grows with adoption rather than arriving all at once. Build the empty states as first-class
+  states — an empty screen that says nothing will be reported as a broken integration.
 
 ---
 
@@ -460,4 +759,4 @@ Related: [SME_NOTIFICATIONS_API.md](./SME_NOTIFICATIONS_API.md) (the `sendToUser
 the deep-link `type` contract used in §5) ·
 [SME_ACTIVITY_TRAIL_API.md](./SME_ACTIVITY_TRAIL_API.md) (`feedback_reports`,
 `survey_responses` and `chat_message_feedback` also appear on a user's timeline) ·
-[WHAT_CHANGED_2026-07-23.md](./WHAT_CHANGED_2026-07-23.md)
+[archive/WHAT_CHANGED_2026-07-23.md](./archive/WHAT_CHANGED_2026-07-23.md) (archived)
