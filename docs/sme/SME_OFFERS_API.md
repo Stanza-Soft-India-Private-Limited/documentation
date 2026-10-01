@@ -491,7 +491,7 @@ then you store `publicUrl` on the campaign. Image data never passes through the 
 |---|---|---|
 | `filename` | string, required | Used only to build a readable object key |
 | `contentType` | string, required | `image/jpeg` \| `image/png` \| `image/webp` |
-| `folder` | string, optional | `offers` (default) \| `banners` |
+| `folder` | string, optional | `offers` (default) \| `banners` \| `exam-logos` \| `pyq-figures` (PYQ stem figures → `questionImageUrl`) |
 
 ```json
 // POST /sme/media/upload-url

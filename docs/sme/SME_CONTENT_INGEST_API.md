@@ -2,6 +2,7 @@
 
 > Changed 2026-09-21 — exam-safe ingest: /sme/content/* + examIds on /cms and content-doc (see [WHAT_CHANGED_2026-09-21.md](./WHAT_CHANGED_2026-09-21.md)).
 > Changed 2026-09-21 — per-exam broadcast, validated segment exam (+ fix), survey targetExams, feedback ?exam= (see [WHAT_CHANGED_2026-09-21.md](./WHAT_CHANGED_2026-09-21.md)).
+> Changed 2026-10-01 — PYQ `paperLabel` / `questionImageUrl` / `imageCaption` / `boardDeleted`, the answer-key write rule, `409 QUESTION_WITHDRAWN`, and figure upload via `pyq-figures` — **§9**.
 
 The ingest surface the SME portal should call. Same three question banks as `/cms/*`
 (PYQ · Mains · Simulations), behind `x-api-key`, with **`examIds` required on every
@@ -263,7 +264,8 @@ Field-for-field the same body as `POST /cms/pyq` (the field tables live in
 > successfully.
 
 ⚠️ **Required, per `prisma/schema.prisma` (`pyq_papers`):** `examIds`, `examName`, `year`,
-`subject`, `topic`, `difficulty`, `source`, `nature`, `question`, `correctAnswer`,
+`subject`, `topic`, `difficulty`, `source`, `nature`, `question`, `correctAnswer`
+(**since 2026-10-01: unless `boardDeleted: true`**, see §9.2),
 `totalMarks`, `duration`, **`tags`, `keywords`, `relatedTopics`**. The create DTO is
 generated from the model, so every one of those
 is NOT NULL with no default and a body missing any of them is a `400`. `source` is one of
@@ -438,7 +440,9 @@ curl -X PATCH {{BASE_URL}}/api/v1/sme/content/pyq/3f6c0e2a-… \
 > `paperNumber`, `subject`, `topic`, `difficulty`, `source`, `nature`, `questionNumber`,
 > `question`, `optionA`–`optionE`, `correctAnswer`, `answerExplanation`, `solveTip`,
 > `prediction`, `weightage`, `totalMarks`, `duration`, `markingScheme`, `tags`,
-> `keywords`, `relatedTopics`, `examIds`.
+> `keywords`, `relatedTopics`, `examIds` — **plus, since 2026-10-01, `paperLabel`,
+> `questionImageUrl`, `imageCaption`, `boardDeleted`** (§9). A PATCH that touches
+> `correctAnswer` or `boardDeleted` is checked against the **merged** row (§9.2).
 
 ---
 
@@ -952,5 +956,145 @@ Deliberately — these have no exam dimension to get wrong, so there was nothing
 | `400` | `examIds must be an array of exam slugs, e.g. ["appsc-group-1"] or ["*"].` | You sent a bare string — it must be an array |
 | `400` | `Question IDs not found: …` / `Duplicate question IDs in payload: …` | `assign-questions` payload problem (§3.9) |
 | `400` | array of validator strings | An ordinary field-level validation failure from the global pipe — note the shape difference from the two `examIds` 400s above |
+| `400` | `correctAnswer is required unless boardDeleted is true — only a question the board deleted may have no answer.` | A live PYQ needs one letter (§9.2). On bulk the message is prefixed `items[<i>]: ` |
+| `400` | `correctAnswer must be a single option letter A–E, or null for a question the board deleted (got "3").` | Send the **letter**, uppercase, not the option number (§9.2) |
 | `401` | — | Missing or wrong `x-api-key` |
 | `404` | `<Resource> not found` | The `:id` does not exist |
+
+---
+
+## 9. PYQ figures, paper labels and board-deleted questions (2026-10-01)
+
+Four optional columns on `pyq_papers`, accepted on `POST /sme/content/pyq`, `pyq/bulk` and
+`PATCH pyq/:id` (and on `/cms/pyq/*`). All four are **additive**: an omitted field means
+"as before", and every existing UPSC row reads `null` / `false`. What the app receives
+is specified, with real serialized responses, in
+[PYQ_MOBILE_CONTRACT_2026-10.md](./PYQ_MOBILE_CONTRACT_2026-10.md).
+
+### 9.1 The fields
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `paperLabel` | string \| null | `null` | The paper chip shown beside the year. **Shown verbatim**, and the server does not validate it, so keep to the convention: `PAPER-I`, `PAPER-II`, `SET-A`, `SET-B`, `MARCH`, `OCTOBER`, `SEPTEMBER` (APPSC uses all of them: a single-paper year is `PAPER-I`). `null` = no chip (UPSC). |
+| `questionImageUrl` | string \| null | `null` | Public URL of the figure in the question stem (map, diagram, table-as-image). The app shows it under the stem, with a tap-to-zoom view on a white background. Use a PNG with a transparent or white background and dark line art. Upload it via §9.4; a URL that does not load shows a broken image. |
+| `imageCaption` | string \| null | `null` | Caption under the figure. Optional even when there is a figure (APPSC figures carry none). |
+| `boardDeleted` | boolean | `false` | The board **withdrew** the question after the exam. It stays in the bank and is **shown** (list, year folder, details) but is **inert**. See §9.3. |
+
+```bash
+# a figure question
+curl -X PATCH {{BASE_URL}}/api/v1/sme/content/pyq/<id> \
+  -H "x-api-key: $API_KEY_SECRET" -H "Content-Type: application/json" \
+  -d '{ "paperLabel": "PAPER-II", "questionImageUrl": "https://<bucket>.s3.ap-south-1.amazonaws.com/pyq-figures/<uuid>-appsc-2024-p2-q3.png" }'
+
+# the board withdrew a live question
+curl -X PATCH {{BASE_URL}}/api/v1/sme/content/pyq/<id> \
+  -H "x-api-key: $API_KEY_SECRET" -H "Content-Type: application/json" \
+  -d '{ "boardDeleted": true, "correctAnswer": null }'
+```
+
+### 9.2 The answer-key write rule
+
+> **A live question needs exactly one option letter `A`–`E`. Only a question with
+> `boardDeleted: true` may have `correctAnswer: null`.**
+
+- Enforced on every PYQ write: `POST`/`PATCH` on `/sme/content/pyq`, `pyq/bulk`, `/cms/pyq`,
+  `/cms/pyq/bulk` and `/pyq`.
+- The letter must be **uppercase `A`–`E`**. `"3"`, `"c"` and `"(C)"` are all `400`. The app
+  ticks the option whose label equals `correctAnswer`, so a number marks every answer wrong.
+  That shipped unnoticed for two months in 2026, which is why the server now refuses it.
+- **PATCH is checked against the merged row.** `{ "correctAnswer": null }` on a live row is a
+  `400`, and so is `{ "boardDeleted": false }` on a row that has no answer. To withdraw a
+  question send both `boardDeleted: true` and `correctAnswer: null` (sending only
+  `boardDeleted: true` is also accepted; the stored letter is then never served).
+- The letter **format** is only checked on a value you actually send, so a typo fix on an
+  old row never fails over a legacy value you did not touch.
+- **Bulk is all-or-nothing** and the message names the item: `items[3]: correctAnswer is
+  required unless boardDeleted is true — …`.
+
+Verbatim (single-string `message`, unlike the validator arrays in §3.1):
+
+```json
+{ "success": false,
+  "message": "correctAnswer is required unless boardDeleted is true — only a question the board deleted may have no answer.",
+  "error": "Bad Request", "statusCode": 400 }
+```
+```json
+{ "success": false,
+  "message": "correctAnswer must be a single option letter A–E, or null for a question the board deleted (got \"3\").",
+  "error": "Bad Request", "statusCode": 400 }
+```
+
+### 9.3 What a board-deleted question does in the app, and `409 QUESTION_WITHDRAWN`
+
+Withdrawn means `boardDeleted = true` **or** `correctAnswer` is `NULL`; both are treated the same.
+
+- **Shown:** list rows, the year folder and question details still include it. `correctAnswer`,
+  the explanation and the solve tip are `null` for **every** tier, premium included.
+- **Never** in a mock test, and **excluded** from `/pyq/metrics` totals, so 100 % stays reachable.
+- **Refused** with `409` (no credit is spent on reveal): submitting an answer, revealing the
+  explanation, and **adding** a bookmark. Removing a bookmark saved before the withdrawal still
+  works.
+
+```json
+{
+  "success": false,
+  "message": "This question was withdrawn by the board and cannot be attempted.",
+  "error": "Conflict",
+  "code": "QUESTION_WITHDRAWN",
+  "statusCode": 409,
+  "timestamp": "<ISO-8601>",
+  "path": "<the request path>",
+  "method": "POST"
+}
+```
+
+Key on `code`, not `message`. These 409s come from the **app** routes (`/pyq/:id/submit`,
+`/pyq/:id/reveal`, `/pyq/:id/bookmark`). Nothing on `/sme/*` returns them.
+
+**Portal-side counts:**
+- `GET /sme/exams/:id/content-counts` → the `prelims` row gains **`boardDeleted`**: how many
+  of its `visible` rows are withdrawn. They stay inside `visible` / `exclusive`, because
+  they are shown.
+- `GET /sme/filter-config/prelims?exam=` → `questionCount` counts **playable** rows only,
+  while the subject list still comes from every active row.
+
+### 9.4 Uploading a figure — `POST /sme/media/upload-url` with `folder: "pyq-figures"`
+
+The same two-step presigned upload as campaign artwork
+([SME_OFFERS_API.md](./SME_OFFERS_API.md) §7):
+
+```json
+// 1. POST /sme/media/upload-url   (x-api-key)
+{ "filename": "appsc-2024-p2-q3.png", "contentType": "image/png", "folder": "pyq-figures" }
+```
+```json
+// 200
+{
+  "uploadUrl": "https://<bucket>.s3.ap-south-1.amazonaws.com/pyq-figures/<uuid>-appsc-2024-p2-q3.png?X-Amz-…",
+  "publicUrl": "https://<bucket>.s3.ap-south-1.amazonaws.com/pyq-figures/<uuid>-appsc-2024-p2-q3.png",
+  "key": "pyq-figures/<uuid>-appsc-2024-p2-q3.png",
+  "expiresInSeconds": 300,
+  "maxBytes": 5242880
+}
+```
+
+2. `PUT <uploadUrl>` with header `Content-Type: image/png` (exactly the type you asked
+   for, because the signature is bound to it) and the raw bytes as the body. No `x-api-key`
+   on this PUT, and it expires after `expiresInSeconds`.
+3. Check the image loads: `HEAD <publicUrl>` should return `200` with the same
+   `Content-Length`.
+4. Store `publicUrl` as the question's `questionImageUrl` (create or PATCH).
+
+- `contentType`: `image/png` \| `image/jpeg` \| `image/webp` only. `folder` must be exactly
+  `pyq-figures` (`pyq_figures`, `pyq` and anything else are `400`).
+- Every call mints a **new** key, so a re-upload gives a new URL and nothing is overwritten.
+  Repoint the question at the new URL.
+
+> 🔴 **`maxBytes` is advertised, not enforced.** The presigned PUT carries no size
+> condition, so S3 accepts a file of any size. **Check the size yourself before uploading**
+> (keep figures well under 5 MB; the 38 APPSC figures are 1–70 KB each). A 20 MB scan uploaded by
+> mistake would be downloaded by every phone that opens the question.
+
+**Errors:** `400` unsupported `contentType` or unknown `folder` · `503` object storage not
+configured on that environment. Upload **per environment**: a staging URL must never be
+stored on a production row.
