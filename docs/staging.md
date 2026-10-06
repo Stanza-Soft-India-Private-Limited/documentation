@@ -68,6 +68,11 @@ existing pattern.
 1. <https://console.neo4j.io> → **New Instance → AuraDB Free**, region `asia-south1` or nearest.
 2. **Download the credentials file when prompted — the password is shown once.**
 3. Fill `NEO4J_URI`, `NEO4J_USERNAME`, `NEO4J_PASSWORD`, `NEO4J_DATABASE`.
+4. ⚠️ **AuraDB Free auto-PAUSES after ~3 idle days.** Symptom: `/health/full` says `neo4j: unhealthy` and
+   `/pyq/:id/details`, `/pyq/metrics`, bookmarks 500. Fix: console → instance → Resume (shows RESUMING), **then
+   redeploy/restart the staging API** — a process that booted while Aura was paused keeps reporting unhealthy even
+   after Aura is back (seen 2026-10-06: direct driver connect OK, API still unhealthy until `mau deploy`).
+   Probe 15× before trusting it. To get a bearer for API probes without a device: `scripts/staging-token.ts`.
 
    ⚠️ **The username and the database are BOTH the instance id, not `neo4j`.** Verified
    live on this instance (`21d04b5f`): `SHOW DATABASES` lists only `21d04b5f` and
