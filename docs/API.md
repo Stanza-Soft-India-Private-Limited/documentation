@@ -1982,6 +1982,49 @@ Check all services health (PostgreSQL, Neo4j, Valkey).
 
 ---
 
+## 8. Payments — per-exam entitlements
+
+### 8.1 List Entitlements
+
+Every exam the user holds (one item per `user_exam_entitlements` row, newest expiry
+first), each with its own plan, gateway, auto-renew and expiry — a user may hold Apple
+for one exam and a Razorpay purchase for another.
+
+**Endpoint**: `GET /payments/entitlements`
+**Authentication**: Required (JWT Bearer Token)
+
+#### Response (200 OK)
+
+```json
+{
+  "entitlements": [
+    {
+      "examId": "upsc-cse",
+      "displayName": "UPSC Civil Services",
+      "shortName": "UPSC",
+      "isLive": false,
+      "plan": "ANNUAL",
+      "source": "RAZORPAY",
+      "autoRenew": false,
+      "expiresAt": "2027-01-01T00:00:00.000Z",
+      "startedAt": "2026-01-01T00:00:00.000Z",
+      "status": "REVOKED",
+      "revokedAt": "2026-10-10T08:00:00.000Z"
+    }
+  ]
+}
+```
+
+- `status`: `LIVE` | `EXPIRED` | `REVOKED` — the same derivation as the SME user view.
+  `REVOKED` (refund / chargeback / SME revoke) wins even when `expiresAt` is still in the
+  future: a revoked row keeps its old expiry for the audit trail, so never infer
+  "cancelled" from the date. Otherwise `LIVE` while `expiresAt` is null (perpetual) or in
+  the future, else `EXPIRED`.
+- `revokedAt`: ISO date the row was revoked, `null` otherwise — always present.
+- `displayName` / `shortName` are `null` when the exam has been deactivated since purchase.
+
+---
+
 ## Common HTTP Status Codes
 
 ### Success Codes
