@@ -117,10 +117,14 @@ Exchange OAuth provider tokens from AWS Cognito for custom backend JWT tokens.
     "profilePicture": "https://example.com/profile.jpg",
     "profileCompletionPercentage": 75,
     "onboardingCompleted": true,
-    "status": "ACTIVE"
+    "status": "ACTIVE",
+    "termsAcceptedAt": null
   }
 }
 ```
+
+`user.termsAcceptedAt` is the ISO date the Terms consent was recorded, or `null` (always
+emitted — never omitted). See `POST /user/terms-accept`.
 
 #### Error Responses
 
@@ -182,9 +186,12 @@ Get current authenticated user's profile information.
   "profileCompletionPercentage": 75,
   "onboardingCompleted": true,
   "status": "ACTIVE",
-  "createdAt": "2025-01-15T10:30:00.000Z"
+  "createdAt": "2025-01-15T10:30:00.000Z",
+  "termsAcceptedAt": "2026-10-11T05:00:00.000Z"
 }
 ```
+
+`termsAcceptedAt` is `null` when consent has not been recorded (always present).
 
 #### Error Responses
 
@@ -304,9 +311,25 @@ Get the full profile of the current user.
   "psychometricTestCompleted": true,
   "profileCompletionPercentage": 85,
   "createdAt": "2025-01-15T10:30:00.000Z",
-  "updatedAt": "2025-10-10T10:30:00.000Z"
+  "updatedAt": "2025-10-10T10:30:00.000Z",
+  "activeExamId": "appsc-group-1",
+  "whatsappExamIds": null,
+  "whatsappExamsEffective": ["appsc-group-1", "upsc-cse"],
+  "user": {
+    "id": "user-uuid-123",
+    "status": "ACTIVE",
+    "termsAcceptedAt": null
+  }
 }
 ```
+
+WhatsApp (Wylto) exam preference — both keys always present:
+- `whatsappExamIds: string[] | null` — what the user stored. `null` = never chosen; `[]` = no exam updates.
+- `whatsappExamsEffective: string[]` — what applies: the stored list, or (never chosen) the active exam
+  (UPSC if unset) plus every exam with a live entitlement. The app shows this set on its switches.
+
+`user.termsAcceptedAt`: ISO date of the recorded Terms consent, `null` when not recorded
+(always present — never omitted).
 
 #### Error Responses
 
@@ -385,8 +408,16 @@ Update the current user's profile.
 }
 ```
 
+**WhatsApp exam preference.** `{ "whatsappExamIds": ["upsc-cse"] }` sets which exams the user
+receives WhatsApp (Wylto) updates for. PATCH semantics: every other field is untouched when
+omitted, and omitting `whatsappExamIds` (or sending `null`) leaves the stored choice alone.
+`[]` is valid ("none"). Up to 10 unique slugs; each must be an ACTIVE exam, else 400 naming
+the unknown ids (nothing is written). A successful change triggers a Wylto re-sync. The
+response is the same shape as `GET /user/profile/me`.
+
 #### Error Responses
 
+- `400 Bad Request` - Validation failed, or `whatsappExamIds` names an unknown/inactive exam
 - `404 Not Found` - Profile not found
 - `409 Conflict` - Unique constraint violation
 
@@ -427,6 +458,30 @@ Mark psychometric test as complete.
   "psychometricTestCompleted": true,
   "profileCompletionPercentage": 100,
   "updatedAt": "2025-10-10T11:00:00.000Z"
+}
+```
+
+---
+
+### 2.6a Record Terms Consent
+
+Record that the user accepted the Terms & Privacy Policy (the sign-in checkbox). The
+subject is the JWT; there is no body. **First acceptance wins**: the date is stamped only
+while it is still `null` (`UPDATE … WHERE terms_accepted_at IS NULL`), so repeat calls —
+every sign-in, a second device, a retry — return the original date unchanged. Idempotent.
+
+The app calls it best-effort after sign-in whenever the profile shows
+`termsAcceptedAt: null`. Deliberately not a flag on the sign-in exchange and not part of
+`PATCH /user/profile/me`.
+
+**Endpoint**: `POST /user/terms-accept`
+**Authentication**: Required (JWT Bearer Token)
+
+#### Response (200 OK)
+
+```json
+{
+  "termsAcceptedAt": "2026-10-11T05:00:00.000Z"
 }
 ```
 

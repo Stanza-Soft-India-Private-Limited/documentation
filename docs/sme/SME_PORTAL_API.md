@@ -235,6 +235,8 @@ above, `entitlements[]` included):
 {
   "…": "every §1.1 summary field, incl. activeExamId / trialExamId / entitlements[]",
   "trialExtended": false,
+  "whatsappExamIds": null,
+  "whatsappExamsEffective": ["appsc-group-1", "upsc-cse"],
   "profile": {
     "id": "4e8c1b26-7f95-4a03-b1d8-52c6e09af417",
     "userId": "0d2f8b41-9a3c-4f2e-8c71-2b6d5a1e7f30",
@@ -306,6 +308,14 @@ in effect for this user — i.e. the underlying `trialEndsAt` column is set and 
 in the future. This is distinct from `trialDaysLeft != null`, which is also true for
 a user riding out their exam's ordinary (never-extended) trial window; `trialExtended`
 tells the portal specifically "an SME granted extra time here."
+
+`whatsappExamIds` / `whatsappExamsEffective` — which exams this person gets WhatsApp
+(Wylto) updates for, the same pair `GET /user/profile/me` returns. `whatsappExamIds` is
+what the user STORED from the app's Profile switches: `null` = never chosen, `[]` =
+explicitly none. `whatsappExamsEffective` is what actually applies: the stored list, or —
+when never chosen — their active exam (UPSC if unset) plus every exam with a LIVE
+entitlement. Drives the `EXAM_UPSC` / `EXAM_APPSC` Wylto tags (when enabled). Read-only
+here; push/feed audiences are unaffected.
 
 `404` if the user doesn't exist.
 

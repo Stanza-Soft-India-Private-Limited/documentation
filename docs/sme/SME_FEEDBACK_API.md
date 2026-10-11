@@ -262,7 +262,14 @@ forward did not succeed (`difyForwarded=false` with a recorded `difyError`, e.g.
 Query: `rating` (default `down`), `mode` (mentor|sme), `page`, `limit`. Returns
 the same `{ data, total, page, limit, hasMore }` pagination wrapper as the report
 list, with rows of `{ id, userId, messageId, mode, rating, subject, chips, text,
-difyForwarded, difyError, createdAt }`.
+examId, difyForwarded, difyError, createdAt, updatedAt }`.
+
+**Since 2.1 a thumb can be changed (like ↔ dislike).** There is exactly ONE row per
+(user, message) — `UNIQUE (user_id, message_id)`, upserted — so `rating` is the user's
+CURRENT verdict and `updatedAt` is when it last changed (`createdAt` = first rating).
+Counts are "messages rated", not "taps". `examId` is the exam the message was chatted in
+(`null` for pre-2.1 rows and older clients = UPSC). Historical duplicates were collapsed
+to the newest row by migration `20261011000002_chat_feedback_upsert`.
 
 ⚠️ `rating` defaults to **`down`**. A screen that calls this endpoint with no params and shows
 "no results" may simply mean there are no thumbs-*down* — pass `rating=up` explicitly to see

@@ -92,7 +92,7 @@ UTC but users are in India, so "today" must resolve in IST.
 |---|---|---:|---|
 | `account` | `user_auth` | – | Explicit column allowlist |
 | `accountLinks` | `user_auth` | – | `provider` + `googleLinked`/`appleLinked` booleans |
-| `profile` | `user_profiles` | – | Whole row (no excluded columns) |
+| `profile` | `user_profiles` | – | Whole row (no excluded columns) — incl. `whatsappExamIds` (the user's WhatsApp exam choice; `null` = never chosen, `[]` = none) |
 | `studyGraph` | Neo4j `User` node | – | Streak/hours. Best-effort, `null` on graph outage |
 | `psychometricResults` | `psychometric_test_results` | 200 | Includes the user's own `answers` JSON |
 | `questionAttempts` | `user_question_attempts` | 5000 | Own selection + ids; not the question bank |

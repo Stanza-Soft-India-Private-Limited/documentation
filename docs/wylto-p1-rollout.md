@@ -138,6 +138,7 @@ whole set and there is no GET-contact to merge against. A tag omitted here is a 
 | `PAID_USER_GONE_QUIET` | **premium** + last active > 7 IST days ago | `UserAuth.lastActiveAt` (new) |
 | `OPTED_OUT` / `OPTED_BACK_IN` | STOP / START reply, last-write-wins | inbound webhook (Phase 3) |
 | `BLOCKED_BY_USER` | **never emitted** — no signal exists | manual only |
+| `EXAM_UPSC` / `EXAM_APPSC` | exam is in the user's WhatsApp exam set — **only when `WYLTO_EXAM_TAGS_ENABLED=true`** | see "EXAM_* tags" below |
 
 ### Two deliberate consequences
 
@@ -219,6 +220,40 @@ not something Wylto documents. Cheap to verify:
 
 If it fails, fall back to create-new + backfill + delete for all four, which costs one extra
 backfill pass and a temporary split population.
+
+## EXAM_* tags (2.1 — exam-targeted promotions)
+
+**What.** Each contact carries one tag per exam it wants WhatsApp updates for:
+`upsc-cse → EXAM_UPSC`, `appsc-group-1 → EXAM_APPSC`. Fixed map in code
+(`EXAM_TAGS` in `wylto-status.util.ts`, both on `KNOWN_TAGS`); an exam with no entry (e.g.
+`tpsc`) emits nothing until its tag exists in the dashboard and is added there.
+
+**The set** is `user_profiles.whatsapp_exam_ids`, which the user edits from the app's Profile
+switches (`PATCH /user/profile/me { whatsappExamIds }`, which also re-syncs that contact):
+- `NULL` (never chosen — everyone on day one) → active exam (UPSC when unset) ∪ every exam
+  with a LIVE entitlement. One indexed `user_exam_entitlements` read, only in this case.
+- a list → exactly that list, no query. `[]` → no exam tags. That is NOT an opt-out:
+  everything else is unchanged and `OPTED_OUT` stays the only hard suppression.
+
+WhatsApp only — push notifications and the in-app feed audience are unaffected.
+
+**Why it is behind a flag (default OFF).** Every user carries at least `EXAM_UPSC` by
+default. An unknown tag is a Wylto 400, a 400 never trips the breaker and never stamps the
+hash, so if the dashboard lacks either tag **every contact's sync fails on every request,
+forever**. With the flag off the tag vector is byte-identical to before.
+
+**Rollout order (must be followed):**
+1. Marketing creates `EXAM_UPSC` and `EXAM_APPSC` in the Wylto dashboard (exact casing).
+2. Apply migration `20261011000001_whatsapp_exam_ids` to prod, then deploy the image with
+   `WYLTO_EXAM_TAGS_ENABLED` **unset**.
+3. Only after step 1 is confirmed: set `WYLTO_EXAM_TAGS_ENABLED=true`, redeploy.
+4. `POST /sme/wylto/resync?force=true` (the tags are part of the sync hash, so a normal sync
+   would also pick them up on each user's next app-open; the forced resync does it now).
+5. Spot-check one contact in the dashboard: `POST /sme/wylto/resync/:userId` on a known
+   account, confirm its tags.
+
+**Rollback:** `WYLTO_EXAM_TAGS_ENABLED=false` → redeploy → `POST /sme/wylto/resync?force=true`.
+The PUT replaces the whole tag set, so the resync removes the exam tags.
 
 ## Known limits (do not re-litigate)
 
