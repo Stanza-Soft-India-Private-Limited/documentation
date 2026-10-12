@@ -812,6 +812,73 @@ Delete a PYQ paper.
 
 ---
 
+### 3.5a Paper filter (`papers` / `?paper=`)
+
+Some exams' questions carry a paper label (APPSC 2024: `PAPER-I` / `PAPER-II`; 2019:
+`SET-A` / `SET-B`). UPSC rows carry none.
+
+- `GET /pyq/filters` adds `papers: string[]` — the distinct non-null labels of active
+  questions in the request exam, sorted, `[]` when there are none. Optional
+  `?year=` / `?subject=` narrow **only** `papers` (a label is meaningful within a year);
+  `subjects` / `years` / `difficulties` / `subjectsMeta` stay exam-wide and unchanged.
+  `subject` matches like the list does (case-insensitive contains). Each narrowing is
+  cached separately (the cache key includes the query string).
+
+  `GET /pyq/filters?year=2024` (APPSC) → `"papers": ["PAPER-I", "PAPER-II"]`
+- `GET /pyq?paper=PAPER-I` — exact match on the label; combine with `year`, `subject`, etc.
+- `GET /mains/filters` carries `papers` too, for shape parity, but it is **always `[]`**:
+  mains questions have no paper-label column, so there is no `?paper=` on `/mains`.
+
+---
+
+### 3.6 Per-account free question set (`pyq_open`)
+
+An exam may give free users **N questions per account, forever** instead of N reveals per
+day. It is switched on per exam by defining the `pyq_open` feature cap; an exam without it
+(UPSC today) behaves exactly as before. Users with a live entitlement for the exam, or inside
+the trial, are never gated (the same exemption the quota guard uses).
+
+The set is stored in Postgres (`user_profiles.free_question_ids`, `{examId: [questionId]}`) —
+not in the Valkey counters, so a cache flush cannot reset anyone's allowance.
+
+| Route | Behaviour when the exam defines `pyq_open` (free user) |
+|---|---|
+| `GET /pyq/:id/details` | Opening a question adds it to the set (up to the limit). Re-opening a member is free. The (N+1)th **distinct** question → **402** (below). An unknown / inactive / board-deleted question never consumes a slot. |
+| `GET /pyq/:id/reveal` | Never charges `pyq_reveal`. In the set → allowed, free. Not in the set → **402** (open it first). |
+| `GET /pyq` | Every item carries `isLocked: boolean` — `true` only once the set is FULL and the item is not in it; otherwise `false` (always `false` without the cap). |
+| `GET /quota/me` | `features.pyq_open = { "type": "lifetime", "limit": 10, "used": <set size>, "remaining": <limit - used> }`; `{ "unlimited": true, "type": "lifetime" }` for an exempt user. Absent when the exam has no `pyq_open` cap. |
+
+Not affected: mock tests, weak-topics / replay, variations.
+
+**402 envelope** (same shape as every quota refusal, plus `exam`):
+
+```json
+{
+  "code": "QUOTA_EXHAUSTED",
+  "feature": "pyq_open",
+  "used": 10,
+  "limit": 10,
+  "type": "lifetime",
+  "exam": "appsc-group-1"
+}
+```
+
+**Turning it on (SME).** `featureCaps` is a per-key partial override merged onto the stored
+one; `pyq_open` accepts only `type: "lifetime"`:
+
+```http
+PATCH /sme/exams/appsc-group-1
+{ "featureCaps": { "pyq_open": { "type": "lifetime", "limit": 10 } } }
+```
+
+Adding `"pyq_reveal": null` to the same body is valid but optional: `null` removes the
+exam's own `pyq_reveal` OVERRIDE and falls back to the global value (`daily 3`) — it does
+**not** switch reveal metering off. It does not matter here, because once `pyq_open` is
+defined the reveal route is governed by the free set and never charges `pyq_reveal`.
+To turn the free set off again: `{ "featureCaps": { "pyq_open": null } }`.
+
+---
+
 ## 4. Mains Papers Module
 
 Base path: `/mains`
