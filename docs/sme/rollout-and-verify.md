@@ -1,5 +1,6 @@
 # SME Management — Rollout & Verify Checklist
 
+> Changed 2026-10-23 — §9 UI localization: the i18n migration (before the image), checks, smoke, sync → publish en → seed hi.
 > Changed 2026-09-21 — exam dimension on users, orders, offers, banners; two BREAKING calls (see [WHAT_CHANGED_2026-09-21.md](./WHAT_CHANGED_2026-09-21.md)).
 > Changed 2026-09-21 — per-exam broadcast, validated segment exam (+ fix), survey targetExams, feedback ?exam= (see [WHAT_CHANGED_2026-09-21.md](./WHAT_CHANGED_2026-09-21.md)).
 
@@ -443,3 +444,113 @@ GROUP BY 1,2,3 HAVING count(*) > 1
 LIMIT 5;
 -- EXPECT zero rows. Any result means a NULL-exam bucket is being re-inserted every run.
 ```
+
+## 9. UI localization (added 2026-10-23)
+
+The surface is documented in [SME_LOCALIZATION_API.md](./SME_LOCALIZATION_API.md). One
+migration, then the image, then a developer seeds the content. **Nothing in the app changes
+until mobile 2.2 ships** — older builds never call `/i18n/*`.
+
+### 9.1 Migration — BEFORE the image
+
+| Migration | What it does |
+|---|---|
+| `20261023000000_i18n` | `i18n_languages` (+ the `en` row: enabled, `published_version` 0), `i18n_labels`, `i18n_translations` (+ FKs to both), and `user_profiles.ui_language VARCHAR(8)` |
+
+Additive and idempotent (`IF NOT EXISTS`, `ON CONFLICT DO NOTHING`, guarded constraints);
+re-running it is a no-op.
+
+> 🔴 **Migration first, image second — not in one window, in that ORDER.** `JwtStrategy`
+> loads the user with `include: { userProfile: true }`, which SELECTs **every**
+> `user_profiles` column the new Prisma client knows — `ui_language` included. Deploy the
+> image before the column exists and **every authenticated request 500s**. The reverse
+> (column present, old image) is harmless: the old client never names it.
+
+### 9.2 Verify against `information_schema`, not `_prisma_migrations`
+
+```sql
+SELECT
+  (SELECT count(*) FROM information_schema.tables
+     WHERE table_schema='public' AND table_name='i18n_languages')    AS i18n_languages,
+  (SELECT count(*) FROM information_schema.tables
+     WHERE table_schema='public' AND table_name='i18n_labels')       AS i18n_labels,
+  (SELECT count(*) FROM information_schema.tables
+     WHERE table_schema='public' AND table_name='i18n_translations') AS i18n_translations,
+  (SELECT count(*) FROM information_schema.columns
+     WHERE table_name='user_profiles' AND column_name='ui_language') AS user_profiles_ui_language;
+-- Expect 1 on every column.
+
+SELECT code, enabled, published_version FROM i18n_languages WHERE code = 'en';
+-- Expect exactly: en | t | 0
+```
+
+### 9.3 Post-deploy smoke (prod, before any content exists)
+
+```bash
+BASE=https://app.stanzasoft.ai/api/v1
+
+curl -si "$BASE/i18n/bundle/en" | grep -iE '^(HTTP|etag|cache-control)'
+# EXPECT: HTTP/1.1 200 · ETag: "en-0" · Cache-Control: no-cache
+#   (labels is {} until the first sync — en at version 0 is a live compile of the registry)
+
+curl -si "$BASE/i18n/bundle/en?v=0" | head -1
+curl -si -H 'If-None-Match: "en-0"' "$BASE/i18n/bundle/en" | head -1
+# EXPECT: HTTP/1.1 200 on BOTH — en at version 0 never answers 304 (its content changes
+#   while its version cannot). A 304 here means the image predates that fix.
+
+curl -s "$BASE/i18n/bundle/xx" | jq -r '.message'
+# EXPECT: Language "xx" is not available        (HTTP 404)
+
+curl -s -o /dev/null -w '%{http_code}\n' "$BASE/sme/i18n/languages"
+# EXPECT: 401   (route deployed and key-guarded — NOT 404)
+
+curl -s -H "x-api-key: $KEY" "$BASE/sme/i18n/languages" | jq -c '.data[] | {code, enabled, publishedVersion}'
+# EXPECT: {"code":"en","enabled":true,"publishedVersion":0}
+```
+
+### 9.4 Content — developer steps, in this order
+
+Run from the backend repo. Both scripts refuse `app.stanzasoft.ai` without `--yes`, print a red
+PRODUCTION banner, and never print the key (`$SME_API_KEY`, else `API_KEY_SECRET` from `--env`).
+
+```bash
+EN=../upsc_app/composeApp/src/commonMain/composeResources/files/i18n/en.json
+
+# 1. The key registry from the 2.2 app. Always dry-runs first and prints the report; refuses
+#    a file under 50 keys or a sync that would retire > 10% of active keys (--allow-shrink).
+npx ts-node -T scripts/i18n-sync.ts --file "$EN" --app-version 2.2 \
+  --base https://app.stanzasoft.ai --env .env.production --yes
+# EXPECT on a fresh DB: added = every key, retired 0, conflicts 0, exit 0.
+#   Exit 2 = conflicts (SME-edited English) — copy the "--- server" lines into en.json.
+
+# 2. Publish en IMMEDIATELY. Until its first publish, en is served at version 0 as a LIVE
+#    compile that can never answer 304, so every app launch downloads the full English
+#    bundle. From v1 on, en gets 304s like any language and English changes reach devices
+#    only through publishes.
+curl -s -X POST -H "x-api-key: $KEY" "$BASE/sme/i18n/languages/en/publish" \
+  | jq -c '{code, version, keyCount, translatedCount}'
+# EXPECT: {"code":"en","version":1,"keyCount":<n>,"translatedCount":<n>}
+curl -si "$BASE/i18n/bundle/en?v=1" | head -1
+# EXPECT: HTTP/1.1 304
+
+# 3. Hindi: create (disabled) → upload in batches of 200 → publish → enable LAST.
+npx ts-node -T scripts/i18n-seed-language.ts --code hi --file <hi.json> \
+  --name Hindi --native-name हिन्दी --updated-by claude-hi-v1 --publish --enable \
+  --base https://app.stanzasoft.ai --env .env.production --yes
+# EXPECT: "Published hi v1: keyCount <n>, translated <t>, missing <n-t>, droppedForPlaceholderMismatch 0"
+#   then "Enabled hi." and the coverage line. A 400 prints every message[] line and STOPS:
+#   fix those keys in hi.json and re-run (earlier batches are idempotent: "unchanged").
+#   The script creates hi with sortOrder 0 (it has no sort-order flag); en still lists first
+#   (ties break by code). To place it explicitly:
+#   curl -X PATCH -H "x-api-key: $KEY" -H 'content-type: application/json' \
+#     -d '{"sortOrder":1}' "$BASE/sme/i18n/languages/hi"
+
+curl -s "$BASE/i18n/languages" | jq -c '[.languages[].code]'
+# EXPECT: ["en","hi"]
+curl -si "$BASE/i18n/bundle/hi" | grep -iE '^(HTTP|etag)'
+# EXPECT: HTTP/1.1 200 · ETag: "hi-1"
+```
+
+Then the mobile 2.2 release. **On every later release:** step 1 again, then republish every
+language whose `draftDirty` is `true` (a sync that changes anything dirties all of them —
+the bundles are self-contained snapshots), `en` first.
