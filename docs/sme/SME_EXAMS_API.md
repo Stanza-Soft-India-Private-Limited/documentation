@@ -783,7 +783,7 @@ PATCH /sme/exams/appsc-group-1
 | Field | Rules |
 |---|---|
 | `titleLine1` `titleLine2` `highlightWord` `benefitsTitle` `socialProof` `ctaLabel` | Strings, trimmed, truncated at 240 chars. Blank/whitespace is treated as absent. |
-| `highlightStyle` | **A STRING ENUM**, one of `NONE` · `TRICOLOR` · `CORAL` · `LAVENDER`. Case-insensitive in, stored uppercase. Anything else is dropped. |
+| `highlightStyle` | **A STRING ENUM**, one of `NONE` · `TRICOLOR` · `CORAL` · `LAVENDER`. Case-insensitive in, stored uppercase. Anything else (the old `{color,bold}` object, an unknown word) is ignored and **the stored value is kept**; `null` or `""` clears it. |
 | `benefits` | Array of strings, max 12; blanks removed. `[]` is a real decision ("no bullets") and is honoured. |
 | `extraComparisonRows` | Array of `{ feature, free, premium }`, max 12. `label` is accepted as a legacy alias for `feature`, and rows saved under the old spelling still render. A row with an empty `feature` is dropped. |
 
@@ -791,8 +791,8 @@ PATCH /sme/exams/appsc-group-1
   the benefits list.
 - **SANITISED, never rejected.** A bad value costs one line of default text rather than
   400-ing the whole edit — the same policy as campaign content, and it is what stops an
-  older or newer portal build bricking saves. (A bad `highlightStyle` is dropped *and*
-  logged.)
+  older or newer portal build bricking saves. (A bad `highlightStyle` is ignored *and*
+  logged, and never wipes a stored valid style — fixed 2026-10-30; it used to.)
 - `comparisonTitle` is **not** authorable — the column has no such key.
 
 > ⚠️ `highlightStyle` really is a plain string here, not the `{color,bold}` object the

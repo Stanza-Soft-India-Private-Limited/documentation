@@ -4,6 +4,8 @@
 > Changed 2026-09-21 — per-exam broadcast, validated segment exam (+ fix), survey targetExams, feedback ?exam= (see [WHAT_CHANGED_2026-09-21.md](./WHAT_CHANGED_2026-09-21.md)).
 > Changed 2026-10-01 — PYQ `paperLabel` / `questionImageUrl` / `imageCaption` / `boardDeleted`, the answer-key write rule, `409 QUESTION_WITHDRAWN`, and figure upload via `pyq-figures` — **§9**.
 > Changed 2026-10-30 — optional `language` on every PYQ / Mains / Simulation write (STRICT here: an unknown code, or `"ENGLISH"`, is a 400) and the `X-Lang` header as an exact language filter on the three lists — see [SME_CONTENT_LANGUAGE_API.md](./SME_CONTENT_LANGUAGE_API.md) §1–§2.
+> Changed 2026-10-30 — optional `marks` (integer 1–50) on `POST mains`, `mains/bulk` items and `PATCH mains/:id`; omitted = default 10 / untouched — **§3.5**.
+> Changed 2026-10-30 — the app's `GET /simulations` no longer lists an active simulation with 0 assigned questions — **§3.6**.
 
 The ingest surface the SME portal should call. Same three question banks as `/cms/*`
 (PYQ · Mains · Simulations), behind `x-api-key`, with **`examIds` required on every
@@ -527,8 +529,16 @@ Same four shapes, same rules, same filters. Two differences from PYQ, both inher
   it runs on this surface too — an optional-subject dump that does not send the flag still
   ends up on the right side of the Mains scope toggle.
 
-> 🔴 **CORRECTED 2026-09-21 from a live staging probe — `marks` is NOT accepted on
-> create, and three array fields are required.** `POST /sme/content/mains` with
+- **`marks` is settable (added 2026-10-30).** Optional integer **1–50** on
+  `POST mains`, on every `mains/bulk` item and on `PATCH mains/:id`. Omitted = the column
+  default `10` on create, and the stored value untouched on PATCH. Out of range or not an
+  integer → **400** (`marks must be at least 1` / `at most 50` / `must be an integer`; in a
+  bulk the whole request is refused). Only on `/sme/content/mains` — the `/cms/mains`
+  bodies still reject it.
+
+> 🔴 **HISTORICAL (2026-09-21, superseded 2026-10-30 — `marks` is now accepted, see
+> above).** At that time a live staging probe showed `marks` was NOT accepted on
+> create, and three array fields are required. `POST /sme/content/mains` with
 > `{"marks":15}` returns, verbatim (nothing was written — this is a validation failure):
 >
 > ```json
@@ -556,13 +566,14 @@ Same four shapes, same rules, same filters. Two differences from PYQ, both inher
 > ```
 >
 > `CreateMainsPaperDto` has **no `marks` property at all**, and `forbidNonWhitelisted`
-> rejects on the key's mere presence — so a mains question's `marks` takes the column
-> default (`10`) and **cannot be set on create or on PATCH**. The example below has been
-> corrected accordingly. `isOptional` *is* settable, and is derived when omitted.
+> rejected on the key's mere presence — so every SME-ingested mains question stored the
+> column default (`10`). Fixed 2026-10-30: the `/sme/content/mains` bodies add an optional
+> `marks` (1–50). The array-field requirements above still hold. `isOptional` *is*
+> settable, and is derived when omitted.
 
 ⚠️ **Required, per `prisma/schema.prisma` (`mains_papers`):** `examIds`, `examName`, `year`,
 `subject`, `topic`, `difficulty`, `question`, **`tags`, `keywords`, `relatedTopics`**.
-`marks` is **not settable** (see above; the column defaults to `10`); `answer` is optional
+`marks` is optional (1–50; the column defaults to `10`); `answer` is optional
 (a question can be loaded before its model answer exists).
 
 ```bash
@@ -577,6 +588,7 @@ curl -X POST {{BASE_URL}}/api/v1/sme/content/mains \
     "difficulty": "HARD",
     "question": "Discuss the influence of the Bhavakavitvam movement on modern Telugu poetry.",
     "answer": "The Bhavakavitvam movement…",
+    "marks": 15,
     "tags": ["15M"],
     "keywords": ["Telugu literature"],
     "relatedTopics": ["Modern Poetry"]
@@ -631,6 +643,11 @@ below is a real mains row of the identical shape, read back from
 
 The simulation is the **container**. Its `examIds` is what scopes every question assigned
 into it (§5).
+
+**Users only see it once it has questions** (2026-10-30): `GET /simulations` lists an active
+simulation only when at least one question is assigned to it (§3.9), so creating the
+container first and assigning afterwards never shows users an empty mock test. The SME list
+(`GET /sme/content/simulations`) still shows it.
 
 | Field | Type | Required | Default |
 |---|---|---|---|
@@ -706,7 +723,7 @@ every optional field but neither `name` nor `durationMinutes` (nothing was writt
 
 > Note the probe sent `totalQuestions`, `correctMark`, `wrongMark`, `skippedMark`,
 > `color`, `sortOrder` and `isActive` and **none of them was rejected** — unlike `marks`
-> on mains (§3.5), every optional field in the table above really is accepted on create.
+> on mains at the time (§3.5; accepted since 2026-10-30), every optional field in the table above really is accepted on create.
 
 `PATCH /sme/content/simulations/:id` takes the same fields, all optional, with §2.4 merge
 semantics. **`404`** if the simulation does not exist.

@@ -533,15 +533,70 @@ through the same sanitiser (`styles`, avatars). Translatable: `badgeText`, `titl
 `socialProofAvatars`, `plans` (titles/prices stay as authored). GET: `content` (English) +
 `contentByLanguage`.
 
-> **Example: not producible on staging until B21 (`e148635`) is deployed** — campaign writes
-> failed with `400 {"message": "Database error", "error": "DatabaseError"}` on image
-> `f7e0871`, for every create that passed validation, including one with plain English
-> content (not language-related) — see commit `e148635`. No `contentByLanguage` body could be
-> captured, so none is shown here. What the capture did prove: the language checks run before
-> the write and answer as documented — `{ "xx": {…} }` and `{ "hi-IN": {…} }` → the §1.1 400
-> (create and PATCH), `{ "ctaLabel": …, "hi": {…} }` →
-> `content mixes language keys (hi) with fields (ctaLabel). …`, `{ "hi": …, "HINDI": … }` → the
-> duplicate-key 400.
+**Example** (live, staging, 2026-10-30 — a DRAFT test campaign written once B21 `e148635`
+fixed campaign writes). `GET /api/v1/sme/offers/e493167d-f09d-4410-8641-71ffefd389fd` with
+`x-api-key: <SME key>` — HTTP 200, no `x-served-lang` (SME reads never send it):
+
+```json
+{
+  "id": "e493167d-f09d-4410-8641-71ffefd389fd",
+  "code": "STGTESTB21",
+  "name": "[STAGING TEST] B21 advisory-lock proof",
+  "status": "DRAFT",
+  "examId": "upsc-cse",
+  "startsAt": "2026-10-30T03:58:16.787Z",
+  "endsAt": "2026-10-30T04:57:16.787Z",
+  "isActiveNow": false,
+  "heroImageUrl": null,
+  "bannerImageUrl": null,
+  "requiresCode": true,
+  "plans": [
+    { "id": "annual", "price": "₹4,999", "title": "Annual", "period": "/year", "priceInPaise": 499900 }
+  ],
+  "content": {
+    "benefits": ["one"],
+    "ctaLabel": "Continue",
+    "badgeText": "TEST",
+    "comparison": [],
+    "titleLine1": "B21 proof",
+    "titleLine2": "advisory lock",
+    "socialProof": "test",
+    "urgencyTitle": "Test",
+    "benefitsTitle": "Benefits",
+    "highlightWord": "proof",
+    "countdownLabel": "ends in",
+    "comparisonTitle": "Compare"
+  },
+  "contentByLanguage": {
+    "en": {
+      "benefits": ["one"],
+      "ctaLabel": "Continue",
+      "badgeText": "TEST",
+      "comparison": [],
+      "titleLine1": "B21 proof",
+      "titleLine2": "advisory lock",
+      "socialProof": "test",
+      "urgencyTitle": "Test",
+      "benefitsTitle": "Benefits",
+      "highlightWord": "proof",
+      "countdownLabel": "ends in",
+      "comparisonTitle": "Compare"
+    },
+    "hi": {
+      "titleLine1": "बी21 प्रमाण"
+    }
+  },
+  "createdAt": "2026-10-30T04:58:16.905Z",
+  "updatedAt": "2026-10-30T04:58:17.009Z"
+}
+```
+
+`content` is the English object exactly as before; `contentByLanguage.hi` holds only the
+fields that were translated (here one) — the app gets English for every other field. The
+language checks run before the write: `{ "xx": {…} }` and `{ "hi-IN": {…} }` → the §1.1 400
+(create and PATCH), `{ "ctaLabel": …, "hi": {…} }` →
+`content mixes language keys (hi) with fields (ctaLabel). …`, `{ "hi": …, "HINDI": … }` → the
+duplicate-key 400.
 
 ### 3.4 Surveys — `POST /sme/surveys`, `PATCH /sme/surveys/:id`
 
@@ -745,6 +800,10 @@ is a **400**, but it is refused by request validation before the language check,
   folder.
   `/pyq/filters` and `/mains/filters` list the union of the requested language and English,
   so every chip opens a non-empty folder.
+  ⚠️ On `/mains/filters` the legacy `subjects` array (kept for old app builds and web) lists
+  only non-optional, non-hidden subjects — **optional subjects are omitted from it**. Build
+  chips from `subjectsMeta` (every visible subject, with `isOptional` and the localised
+  `displayName`).
 - **Language-blind by design:** every by-id read, `?bookmarked=true`, `/reels/bookmarks`,
   `/pyq/wrong-answers`, `/pyq/weak-topics`, `/content-doc/continue-reading` — and
   **`/reels/feed`** (2026-10-30 ruling: reels are a shared feed, `language` is a tag — the
@@ -754,6 +813,13 @@ is a **400**, but it is refused by request validation before the language check,
   client that sends no header gets byte-identical responses.
 - **Copy routes** (`/paywall`, `/config`, `/tasks/today`, `/feedback/surveys/*`) return the
   same shapes with the copy in the requested language, English per field where untranslated.
+  **`/config`, `/paywall` and `/tasks/today` send NO `X-Served-Lang` header and no
+  `servedLang` field — by design**, even when `X-Lang` was sent: they are per-field overlays
+  (each field is the requested language where translated, English where not), so there is
+  no single "served language" to report, and their wire shapes are frozen for shipped
+  builds. They do send `Vary: X-Lang` (below). Observed on staging 2026-10-30 with
+  `X-Lang: hi`: all three HTTP 200, `vary: Origin, X-Lang, Accept-Encoding`, no
+  `x-served-lang`. (`/config` is the one route outside the `/api/v1` prefix.)
 - **Cache:** `/pyq/filters`, `/mains/filters` vary by `X-Lang` (`Vary: X-Lang`; the cache key
   only changes when the header is sent). `/config`, `/paywall` and `/tasks/today` are not
   server-cached but their bodies depend on the header, so they send `Vary: X-Lang` too.
@@ -761,6 +827,11 @@ is a **400**, but it is refused by request validation before the language check,
   After creating content — especially the FIRST Hindi rows of a subject, or a new subject —
   the new chip / `displayName` can take up to an hour to appear there, while `/pyq` and
   `/mains` themselves list the rows at once. Check with the list, not with the filters.
+  The two kinds of write differ: **filter-config writes** (`PUT /sme/filter-config/…`,
+  incl. a subject `displayName` / `displayNameI18n`, and the mains optional flip — see
+  [SME_FILTER_CONFIG_API.md](./SME_FILTER_CONFIG_API.md)) **bust the filters cache
+  immediately**; **content creation** (`/sme/content/*`, `/cms/*`, bulk) does **not** — it
+  waits out the cache (≤ 1 hour).
 - Observed, not a promise: other language-dependent responses — the `/pyq`, `/mains` and
   `/content-doc` lists, the `/metrics` routes, `/feedback/surveys/current` — do **not** send
   `Vary: X-Lang` (staging, 2026-10-30). A client-side cache must key on `X-Lang` itself.
@@ -768,7 +839,8 @@ is a **400**, but it is refused by request validation before the language check,
 ### 5.1 Examples (app routes, `Authorization: Bearer <app user JWT>`, `X-Exam: appsc-group-1`)
 
 **Filters are the union.** `GET /api/v1/pyq/filters` with `X-Lang: hi` — HTTP 200,
-`x-served-lang: hi`, `vary: Origin, X-Lang, Accept-Encoding` (arrays trimmed):
+`x-served-lang: hi`, `vary: Origin, X-Lang, Accept-Encoding` (live, staging, 2026-10-30;
+`subjectsMeta` in full, other arrays trimmed):
 
 ```json
 {
@@ -776,10 +848,17 @@ is a **400**, but it is refused by request validation before the language check,
   "years": [2026, 2025, 2024, "…(+11 more)"],
   "difficulties": ["EASY", "MEDIUM", "HARD"],
   "subjectsMeta": [
-    { "subject": "Art & Culture", "displayName": "Art & Culture", "iconKey": "sme_art", "isOptional": false },
-    { "subject": "Current Affairs", "displayName": "Current Affairs", "iconKey": "sme_current_affairs", "isOptional": false },
-    { "subject": "Environment & Ecology", "displayName": "Environment & Ecology", "iconKey": "sme_environment", "isOptional": false },
-    "…(+8 more)"
+    { "subject": "IR & Security", "displayName": "अंतरराष्ट्रीय संबंध एवं सुरक्षा", "iconKey": "sme_ir", "isOptional": false },
+    { "subject": "Economy", "displayName": "अर्थव्यवस्था", "iconKey": "sme_economy", "isOptional": false },
+    { "subject": "History", "displayName": "इतिहास", "iconKey": "sme_history", "isOptional": false },
+    { "subject": "Art & Culture", "displayName": "कला एवं संस्कृति", "iconKey": "sme_art", "isOptional": false },
+    { "subject": "Environment & Ecology", "displayName": "पर्यावरण एवं पारिस्थितिकी", "iconKey": "sme_environment", "isOptional": false },
+    { "subject": "Geography", "displayName": "भूगोल", "iconKey": "sme_geography", "isOptional": false },
+    { "subject": "Mental Ability", "displayName": "मानसिक योग्यता", "iconKey": "sme_science_technology", "isOptional": false },
+    { "subject": "Polity", "displayName": "राजव्यवस्था", "iconKey": "sme_polity", "isOptional": false },
+    { "subject": "Science & Technology", "displayName": "विज्ञान एवं प्रौद्योगिकी", "iconKey": "sme_science_technology", "isOptional": false },
+    { "subject": "Governance & Society", "displayName": "शासन एवं समाज", "iconKey": "sme_governance", "isOptional": false },
+    { "subject": "Current Affairs", "displayName": "समसामयिकी", "iconKey": "sme_current_affairs", "isOptional": false }
   ],
   "papers": ["MARCH", "OCTOBER", "PAPER-I", "…(+4 more)"],
   "servedLang": "hi"
@@ -805,10 +884,11 @@ The same call without `X-Lang` — HTTP 200, no `x-served-lang`, no `servedLang`
 ```
 
 Compared in full (untrimmed): the `subjects` keys are identical; `years` with `hi` adds
-`2026, 2025, 2023` (years that only Hindi rows have) and drops none; with `hi` two
-`displayName`s are Hindi — `Economy → अर्थव्यवस्था`, `Polity → राजव्यवस्था` — and
-`subjectsMeta` is sorted on the displayed name, so those two sort last; without the header no
-name is translated.
+`2026, 2025, 2023` (years that only Hindi rows have) and drops none; with `hi` **every**
+subject now has a Hindi `displayName` (all 11 on APPSC), and `subjectsMeta` is sorted on the
+displayed (Hindi) name, so its order differs from the English one — the `subject` keys you
+filter with stay English; without the header no name is translated. (Refreshed 2026-10-30:
+an earlier capture had only Economy and Polity translated.)
 
 **By-id is language-blind.** The Hindi row from §1.1, opened with `X-Lang: en`:
 
