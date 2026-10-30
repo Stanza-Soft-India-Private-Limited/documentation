@@ -1,5 +1,6 @@
 # SME — Promotional Offers API Guide
 
+> Changed 2026-10-30 — campaign `content` also takes a per-language map; detail/list add `contentByLanguage` — see [SME_CONTENT_LANGUAGE_API.md](./SME_CONTENT_LANGUAGE_API.md) §3.3.
 > Changed 2026-09-21 — exam dimension on users, orders, offers, banners; two BREAKING calls (see [WHAT_CHANGED_2026-09-21.md](./WHAT_CHANGED_2026-09-21.md)).
 > Changed 2026-09-21 — per-exam broadcast, validated segment exam (+ fix), survey targetExams, feedback ?exam= (see [WHAT_CHANGED_2026-09-21.md](./WHAT_CHANGED_2026-09-21.md)).
 

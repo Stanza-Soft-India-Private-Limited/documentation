@@ -1,5 +1,6 @@
 # SME — Notification Rules API Guide
 
+> Changed 2026-10-30 — `copy` also takes a per-language map (same `{{placeholders}}` as English, else 400); each recipient gets the copy in their app UI language — see [SME_CONTENT_LANGUAGE_API.md](./SME_CONTENT_LANGUAGE_API.md) §3.5.
 > Changed 2026-09-21 — exam-scoping gaps closed (existing contracts).
 
 **Base URL:** `https://app.stanzasoft.ai/api/v1`

@@ -1,5 +1,6 @@
 # CMS Admin API — Unified Content Management Guide
 
+> Changed 2026-10-30 — optional `language` on PYQ / Mains / Simulation / psychometric test-set writes, LENIENT here (`"ENGLISH"` → `en`, unknown → `en` + server warning, never a 400) — see [SME_CONTENT_LANGUAGE_API.md](./SME_CONTENT_LANGUAGE_API.md) §1.2.
 > LEGACY INGEST SURFACE — kept working, not extended. New integrations should use /sme/content/* (key-gated, exam-safe). Migration map in §0.
 
 > Changed 2026-09-21 — exam-safe ingest: /sme/content/* + examIds on /cms and content-doc (see [WHAT_CHANGED_2026-09-21.md](./WHAT_CHANGED_2026-09-21.md)).

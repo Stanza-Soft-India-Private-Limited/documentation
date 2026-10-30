@@ -1,6 +1,7 @@
 # SME — Subject Filter Config API Guide
 
 > Changed 2026-09-21 — exam-scoping gaps closed (existing contracts).
+> Changed 2026-10-30 — `displayName` also takes a per-language map (`{ "en": "Polity", "hi": "राजव्यवस्था" }`); `effective.displayNameByLanguage` on every response; the subject KEY stays English — see [SME_CONTENT_LANGUAGE_API.md](./SME_CONTENT_LANGUAGE_API.md) §3.2.
 
 Reference for the **SME portal** to manage what the app's PYQ **Prelims** and **Mains**
 subject filters look like: per-subject **display name**, **icon**, **visibility** and

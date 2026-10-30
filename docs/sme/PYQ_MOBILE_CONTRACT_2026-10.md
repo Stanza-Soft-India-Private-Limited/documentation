@@ -10,6 +10,11 @@ intentional change.
 All changes are **additive**. No key was removed or renamed; old builds that ignore
 unknown keys (`ignoreUnknownKeys = true` in `HttpClientFactory`) keep working.
 
+> **Changed 2026-10-30 (content language).** `language` is now the row's content-language
+> CODE (`"en"`, `"hi"`) instead of the dead free-text `"ENGLISH"` — same key, still a
+> non-null string, so 2.1 decodes it unchanged. A request without `X-Lang` gets exactly
+> the blocks below (English rows, no `servedLang`). See `SME_CONTENT_LANGUAGE_API.md`.
+
 ## What is new
 
 | Field | Where | Type | Meaning |
@@ -20,6 +25,7 @@ unknown keys (`ignoreUnknownKeys = true` in `HttpClientFactory`) keep working.
 | `boardDeleted` | list row, details `question` | `Boolean` | The board withdrew this question after the exam. See below. |
 | `examName` | details `question` (list rows already had it) | `String` | e.g. `"APPSC Group 1"`, `"UPSC CSE"`. Never null. |
 | `paperNumber` | details `question` (list rows already had it) | `Int?` | `null` for UPSC. |
+| `language` | details `question`, mock item (list rows already had it) | `String` | Added 2026-10-30. The row's content-language code (`"en"`, `"hi"`). Never null. Sent with or without `X-Lang` (details is a by-id read and ignores the header). |
 
 ### Board-deleted questions (`boardDeleted: true`)
 
@@ -106,7 +112,7 @@ same row has `correctAnswer`, `answerExplanation`, `solveTip` set to `null` (cas
   "relatedTopics": [],
   "isActive": true,
   "isVerified": true,
-  "language": "ENGLISH",
+  "language": "en",
   "createdAt": "2026-10-01T06:30:00.000Z",
   "updatedAt": "2026-10-01T06:30:00.000Z",
   "examIds": [
@@ -156,7 +162,7 @@ same row has `correctAnswer`, `answerExplanation`, `solveTip` set to `null` (cas
   "relatedTopics": [],
   "isActive": true,
   "isVerified": true,
-  "language": "ENGLISH",
+  "language": "en",
   "createdAt": "2026-10-01T06:30:00.000Z",
   "updatedAt": "2026-10-01T06:30:00.000Z",
   "examIds": [
@@ -206,7 +212,7 @@ same row has `correctAnswer`, `answerExplanation`, `solveTip` set to `null` (cas
   "relatedTopics": [],
   "isActive": true,
   "isVerified": true,
-  "language": "ENGLISH",
+  "language": "en",
   "createdAt": "2026-10-01T06:30:00.000Z",
   "updatedAt": "2026-10-01T06:30:00.000Z",
   "examIds": [
@@ -256,7 +262,7 @@ same row has `correctAnswer`, `answerExplanation`, `solveTip` set to `null` (cas
   "relatedTopics": [],
   "isActive": true,
   "isVerified": true,
-  "language": "ENGLISH",
+  "language": "en",
   "createdAt": "2026-10-01T06:30:00.000Z",
   "updatedAt": "2026-10-01T06:30:00.000Z",
   "examIds": [
@@ -299,7 +305,8 @@ returning the explanation to a free user. Shown for a premium user.
     "paperNumber": 1,
     "paperLabel": "PAPER-I",
     "questionImageUrl": "https://example-media-bucket.s3.ap-south-1.amazonaws.com/pyq-figures/3b1e9c2a-5d4f-4e8a-9c1b-7a2d6e0f4c11-appsc-2024-p1-q17.png",
-    "imageCaption": "Map of Andhra Pradesh — rivers"
+    "imageCaption": "Map of Andhra Pradesh — rivers",
+    "language": "en"
   },
   "lastAttempt": null,
   "correctAnswer": "B",
@@ -337,7 +344,8 @@ returning the explanation to a free user. Shown for a premium user.
     "paperNumber": 1,
     "paperLabel": "PAPER-I",
     "questionImageUrl": null,
-    "imageCaption": null
+    "imageCaption": null,
+    "language": "en"
   },
   "lastAttempt": null,
   "correctAnswer": null,
@@ -373,7 +381,8 @@ returning the explanation to a free user. Shown for a premium user.
     "paperNumber": null,
     "paperLabel": null,
     "questionImageUrl": null,
-    "imageCaption": null
+    "imageCaption": null,
+    "language": "en"
   },
   "lastAttempt": null,
   "correctAnswer": "C",
@@ -412,7 +421,8 @@ Array of these. Board-deleted questions are never served, so every item has a st
   "difficulty": "MEDIUM",
   "paperLabel": "PAPER-I",
   "questionImageUrl": "https://example-media-bucket.s3.ap-south-1.amazonaws.com/pyq-figures/3b1e9c2a-5d4f-4e8a-9c1b-7a2d6e0f4c11-appsc-2024-p1-q17.png",
-  "imageCaption": "Map of Andhra Pradesh — rivers"
+  "imageCaption": "Map of Andhra Pradesh — rivers",
+  "language": "en"
 }
 ```
 
@@ -440,6 +450,7 @@ Not served — excluded from the pool.
   "difficulty": "MEDIUM",
   "paperLabel": null,
   "questionImageUrl": null,
-  "imageCaption": null
+  "imageCaption": null,
+  "language": "en"
 }
 ```

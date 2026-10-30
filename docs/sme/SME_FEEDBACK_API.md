@@ -1,5 +1,6 @@
 # SME Feedback API
 
+> Changed 2026-10-30 — survey `title` / `description` / `questions` also take per-language maps (translations align by position on the English ids); GET adds `titleByLanguage` / `descriptionByLanguage` / `questionsByLanguage` — see [SME_CONTENT_LANGUAGE_API.md](./SME_CONTENT_LANGUAGE_API.md) §3.4.
 > Changed 2026-09-21 — stale-text pass (telemetry live in 2.0, version ladder, links). Exam-dimension changes follow in [WHAT_CHANGED_2026-09-21.md](./WHAT_CHANGED_2026-09-21.md).
 > Changed 2026-09-21 — per-exam broadcast, validated segment exam (+ fix), survey targetExams, feedback ?exam= (see [WHAT_CHANGED_2026-09-21.md](./WHAT_CHANGED_2026-09-21.md)).
 

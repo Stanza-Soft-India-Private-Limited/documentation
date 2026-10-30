@@ -1,5 +1,6 @@
 # SME Exams API — multi-exam modes
 
+> Changed 2026-10-30 — `paywallContent` also takes a per-language map; responses add `paywallContentByLanguage` — see [SME_CONTENT_LANGUAGE_API.md](./SME_CONTENT_LANGUAGE_API.md) §3.1.
 > Changed 2026-09-21 — exam-scoping gaps closed (existing contracts).
 > Changed 2026-09-21 — exam-safe ingest: /sme/content/* + examIds on /cms and content-doc (see [WHAT_CHANGED_2026-09-21.md](./WHAT_CHANGED_2026-09-21.md)).
 

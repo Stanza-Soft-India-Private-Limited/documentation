@@ -3,6 +3,7 @@
 > Changed 2026-09-21 — exam-safe ingest: /sme/content/* + examIds on /cms and content-doc (see [WHAT_CHANGED_2026-09-21.md](./WHAT_CHANGED_2026-09-21.md)).
 > Changed 2026-09-21 — per-exam broadcast, validated segment exam (+ fix), survey targetExams, feedback ?exam= (see [WHAT_CHANGED_2026-09-21.md](./WHAT_CHANGED_2026-09-21.md)).
 > Changed 2026-10-01 — PYQ `paperLabel` / `questionImageUrl` / `imageCaption` / `boardDeleted`, the answer-key write rule, `409 QUESTION_WITHDRAWN`, and figure upload via `pyq-figures` — **§9**.
+> Changed 2026-10-30 — optional `language` on every PYQ / Mains / Simulation write (STRICT here: an unknown code, or `"ENGLISH"`, is a 400) and the `X-Lang` header as an exact language filter on the three lists — see [SME_CONTENT_LANGUAGE_API.md](./SME_CONTENT_LANGUAGE_API.md) §1–§2.
 
 The ingest surface the SME portal should call. Same three question banks as `/cms/*`
 (PYQ · Mains · Simulations), behind `x-api-key`, with **`examIds` required on every
@@ -340,7 +341,7 @@ in the staging bank — id `94534edf-ffe3-4b4a-a531-a7e438abdb10`.)
   "relatedTopics": ["State Legislature"],
   "isActive": true,
   "isVerified": false,
-  "language": "ENGLISH",
+  "language": "en",
   "createdAt": "2026-09-21T14:49:51.364Z",
   "updatedAt": "2026-09-21T14:49:51.364Z",
   "examIds": ["appsc-group-1"]
@@ -349,7 +350,12 @@ in the staging bank — id `94534edf-ffe3-4b4a-a531-a7e438abdb10`.)
 
 > **The response is the whole row, not a projection** — 34 keys, `examIds` **last**, and
 > every unset nullable column present as `null` rather than omitted. `repeatFrequency`
-> defaults to `0` and `language` to `"ENGLISH"`; neither is settable on create.
+> defaults to `0` and is not settable. **`language`** (corrected 2026-10-30) is a language
+> CODE, default `"en"`, and **is settable** — an optional `language` on create and PATCH,
+> strict (a code from `GET /sme/i18n/languages`, else 400); see
+> [SME_CONTENT_LANGUAGE_API.md](./SME_CONTENT_LANGUAGE_API.md) §1.1. (This capture predates
+> the change: on 2026-09-21 the dead column read `"ENGLISH"`; today the same row reads
+> `"en"`, shown above.)
 
 `examIds` on the response is the **normalised, stored** value — read it back rather than
 assuming what you sent is what landed.
@@ -431,9 +437,11 @@ curl -X PATCH {{BASE_URL}}/api/v1/sme/content/pyq/3f6c0e2a-… \
 > ```
 >
 > `UpdatePYQPaperDto` is generated from the Prisma model's *writable content* fields and
-> carries **no `isVerified`, no `isActive`, no `language`, no `repeatFrequency`** —
-> while `forbidNonWhitelisted` rejects the whole request on the mere presence of the key.
-> The four flags are readable on every response and settable on **none** of them.
+> carries **no `isVerified`, no `isActive`, no `repeatFrequency`** — while
+> `forbidNonWhitelisted` rejects the whole request on the mere presence of the key. The
+> three flags are readable on every response and settable on **none** of them.
+> (Corrected 2026-10-30: `language` WAS on this list; it is now an optional, strict field
+> on create and PATCH — [SME_CONTENT_LANGUAGE_API.md](./SME_CONTENT_LANGUAGE_API.md) §1.1.)
 >
 > **So there is no verification workflow on `/sme/content/*` today.** A portal "Verify"
 > button has no endpoint behind it. The updatable set is exactly: `examName`, `year`,
@@ -441,7 +449,8 @@ curl -X PATCH {{BASE_URL}}/api/v1/sme/content/pyq/3f6c0e2a-… \
 > `question`, `optionA`–`optionE`, `correctAnswer`, `answerExplanation`, `solveTip`,
 > `prediction`, `weightage`, `totalMarks`, `duration`, `markingScheme`, `tags`,
 > `keywords`, `relatedTopics`, `examIds` — **plus, since 2026-10-01, `paperLabel`,
-> `questionImageUrl`, `imageCaption`, `boardDeleted`** (§9). A PATCH that touches
+> `questionImageUrl`, `imageCaption`, `boardDeleted`** (§9) **and, since 2026-10-30,
+> `language`** (omitted = unchanged). A PATCH that touches
 > `correctAnswer` or `boardDeleted` is checked against the **merged** row (§9.2).
 
 ---
@@ -486,7 +495,7 @@ shown in §3.1, abbreviated here to the keys this section is about):
       "tags": ["smoke"], "keywords": ["legislative council"], "relatedTopics": ["State Legislature"],
       "isActive": true,
       "isVerified": false,
-      "language": "ENGLISH",
+      "language": "en",            // "ENGLISH" in this 2026-09-21 capture; a code since 2026-10-30
       "createdAt": "2026-09-21T14:49:51.364Z",
       "updatedAt": "2026-09-21T14:49:51.364Z",
       "examIds": ["appsc-group-1"]
@@ -601,7 +610,7 @@ below is a real mains row of the identical shape, read back from
   "relatedTopics": ["Art & Culture"],
   "isActive": true,
   "isVerified": false,
-  "language": "ENGLISH",
+  "language": "en",
   "isOptional": false,
   "examIds": ["upsc-cse"],
   "createdAt": "2026-03-18T12:02:22.405Z",
@@ -612,7 +621,9 @@ below is a real mains row of the identical shape, read back from
 > That same call reported `"meta": { "total": 7466, "page": 1, "limit": 1, "totalPages":
 > 7466, "hasNext": true, "hasPrev": false }` — i.e. the staging mains bank holds 7,466
 > UPSC rows and **zero APPSC rows** (`?exam=appsc-group-1` → `{"data":[],"meta":{"total":0,…}}`).
-> Note `marks: 10` on a row nobody could have set it on.
+> Note `marks: 10` on a row nobody could have set it on. (`language` read `"ENGLISH"` in this
+> 2026-09-21 capture; since 2026-10-30 it is a language code, `"en"` for every existing row —
+> settable on create/PATCH, see [SME_CONTENT_LANGUAGE_API.md](./SME_CONTENT_LANGUAGE_API.md) §1.1.)
 
 ---
 

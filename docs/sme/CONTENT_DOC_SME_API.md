@@ -1,5 +1,6 @@
 # Content Document — SME / AI Stack API Guide
 
+> Changed 2026-10-30 — `language` is a code now (`"en"`, `"hi"`; `"ENGLISH"` still accepted and stored as `en`, an unknown code stored as `en` with a server warning); `X-Lang` filters the list (absent = every language, unknown = 400) — see [SME_CONTENT_LANGUAGE_API.md](./SME_CONTENT_LANGUAGE_API.md) §1.2, §2.
 > Changed 2026-09-21 — exam-safe ingest: /sme/content/* + examIds on /cms and content-doc (see [WHAT_CHANGED_2026-09-21.md](./WHAT_CHANGED_2026-09-21.md)).
 > Changed 2026-09-21 — per-exam broadcast, validated segment exam (+ fix), survey targetExams, feedback ?exam= (see [WHAT_CHANGED_2026-09-21.md](./WHAT_CHANGED_2026-09-21.md)).
 
@@ -36,13 +37,13 @@ Content-Type: application/json
   "subTopic": "Right to Equality",
   "rawMarkdown": "## Introduction\n\nThe Fundamental Rights are...\n\n```quiz\nQ: How many FR exist?\nA) Five\nB) Six\nC) Seven\nD) Eight\nCorrect: B\nExplanation: After 44th Amendment, six FRs remain.\n```\n\n## Summary\n\nFRs are the cornerstone...",
   "status": "DRAFT",
-  "language": "ENGLISH",
+  "language": "en",
   "examIds": ["*"]
 }
 ```
 
 **Required fields:** `title`, `subject`, `topic`, `rawMarkdown`
-**Optional fields:** `subTopic`, `status` (DRAFT | PUBLISHED | ARCHIVED, default: DRAFT), `language` (default: ENGLISH), `sourceId`, `examIds` (default: `["upsc-cse"]`)
+**Optional fields:** `subTopic`, `status` (DRAFT | PUBLISHED | ARCHIVED, default: DRAFT), `language` (a code from `GET /sme/i18n/languages`, e.g. `"en"`, `"hi"`; default: `"en"` — the legacy `"ENGLISH"`/`"HINDI"` are still accepted and stored as `en`/`hi`, an unknown value is stored as `en` with a server warning), `sourceId`, `examIds` (default: `["upsc-cse"]`)
 
 **Response (201):**
 Returns the created document with:
