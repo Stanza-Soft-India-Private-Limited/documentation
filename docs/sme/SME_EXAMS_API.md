@@ -63,8 +63,8 @@ Every exam, active or not, in display order.
     "logoUrl": null,
     "featureFlags": null,
     "featureCaps": null,
-    "trialDays": 14,
-    "trialPolicy": [{ "days": 14, "effectiveFrom": "1970-01-01T00:00:00Z" }],
+    "trialDays": 3,
+    "trialPolicy": [{ "days": 14, "effectiveFrom": "1970-01-01T00:00:00Z" }, { "days": 3, "effectiveFrom": "2026-09-25T04:14:27Z" }],
     "paywallContent": null,
     "isActive": true,
     "sortOrder": 0,
@@ -355,11 +355,13 @@ create a new group per exam and record it in `appleSubscriptionGroupId`.
 
 Omit it to reach the whole cohort, exactly as before.
 
-⚠️ **`exam: "upsc-cse"` also matches every user who has never used the switcher.** There is
-no onboarding exam step, so an unset preference means UPSC — matching only the literal
-value would reach almost nobody.
+⚠️ **`exam: "upsc-cse"` also matches every user whose `active_exam_id` is unset.** App 2.0
+(2026-09-17) added the exam picker as onboarding step 1 and writes the column, but everyone
+who onboarded on an older build and never used the switcher is still NULL — an unset
+preference means UPSC, and matching only the literal value would reach a fraction of UPSC.
 
-`POST /sme/notifications/broadcast` is a **topic** blast and cannot be segmented by exam.
+`POST /sme/notifications/broadcast` takes `exam` too: it addresses the FCM topic
+`exam_<slug>` instead of `all_users` (unknown slug → 400).
 
 ---
 
@@ -596,7 +598,8 @@ PATCH /sme/exams/appsc-group-1
 ```
 
 **Valid keys** (anything else is a 400 — a limit nothing meters is a setting that does
-nothing):
+nothing). The ten below have a global default; an eleventh, **`pyq_open`**, has none (see
+after the table):
 
 | Cap key | Global default | Gated by flag |
 |---|---|---|
@@ -610,6 +613,11 @@ nothing):
 | `pyq_mains_reveal` | `daily 3` | `mains.modelAnswer` |
 | `content_doc` | `lifetime_per_subject 1` | `library.content` |
 | `pyq_variation` | `premium_only` | `prelims.variation` |
+| `pyq_open` | — (none: an exam is gated only when it sets one) | — |
+
+`pyq_open` is the **free question set**: N PYQ questions per account, forever, metered by
+`FreeQuestionSetService` (not `UsageQuotaGuard`). Only `{ "type": "lifetime", "limit": N }`
+is accepted (any other type is a 400); `null` removes it.
 
 **Each entry is a WHOLE cap**, `{ type, limit? }`, never a patch of one sub-field:
 
@@ -719,7 +727,9 @@ immediately.
 `20260917000000_per_exam_config` seeded **`appsc-group-1` to `trialDays: 0`**, with history
 `[{14, epoch}, {0, <migration time>}]`. Existing APPSC users keep the window they were
 already inside; everyone who signs up after the migration gets none. `upsc-cse` was left
-untouched at 14 from the epoch, which reproduces the old compile-time constant exactly.
+untouched at 14 from the epoch by the migration (reproducing the old compile-time constant);
+it was then **cut to 3 days on 2026-09-25** by an SME PATCH (history entry `{3,
+2026-09-25T04:14:27Z}`, §4).
 
 ### Two consequences worth knowing
 
@@ -946,8 +956,9 @@ silently 403-ing for everyone.
 
 **`upsc-cse` with no overrides is byte-identical to before all of this**, and a request
 carrying no exam header at all resolves to `upsc-cse`. Every flag resolves true, so no
-gate ever throws; the caps are the global map unchanged; the trial is 14 days from the
-epoch entry; the paywall returns the legacy content verbatim; `enabledModules` derives back
+gate ever throws; the caps are the global map unchanged; the trial follows the
+`trialPolicy` history (14 days from the epoch entry, 3 days for signups from 2026-09-25 —
+an SME data change, not a code change); the paywall returns the legacy content verbatim; `enabledModules` derives back
 to the same five names. That covers every shipped 1.8/1.9/2.0 install and the whole of
 prepmonkey-web. It is checked rather than asserted —
 `scripts/verify-exam-backcompat.ts --compare` captures ~30 endpoints before and after a

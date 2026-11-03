@@ -81,7 +81,11 @@ URL-encoded (e.g. `GS%20Paper%201`, `Sociology%20Optional`).
 GET /sme/filter-config/:examType
 ```
 Returns every subject present in the (active) question data — plus any stale override
-entries whose questions are gone (`questionCount: 0`) so they stay clearable. Hidden
+entries whose questions are gone (`questionCount: 0`) so they stay clearable.
+`questionCount` counts active rows in the exam, **every language summed**; for **prelims**
+it counts PLAYABLE rows only (board-withdrawn questions excluded), while the subject list
+itself comes from every active row — so a prelims subject whose questions were all
+withdrawn is listed with `questionCount: 0`. Hidden
 subjects ARE included here (the portal must see everything); the public endpoints drop them.
 
 ```json
@@ -94,14 +98,14 @@ subjects ARE included here (the portal must see everything); the public endpoint
       "subject": "GS Paper 1",
       "isOptional": false,
       "questionCount": 270,
-      "effective": { "displayName": "GS Paper 1", "iconKey": "sme_history", "hidden": false, "sortOrder": 1 },
+      "effective": { "displayName": "GS Paper 1", "iconKey": "sme_history", "hidden": false, "sortOrder": 1, "displayNameByLanguage": { "en": "GS Paper 1" } },
       "override": { "sortOrder": 1 }
     },
     {
       "subject": "Sociology Optional",
       "isOptional": true,
       "questionCount": 729,
-      "effective": { "displayName": "Sociology", "iconKey": "sme_governance", "hidden": false, "sortOrder": null },
+      "effective": { "displayName": "Sociology", "iconKey": "sme_governance", "hidden": false, "sortOrder": null, "displayNameByLanguage": { "en": "Sociology" } },
       "override": null
     }
   ]
@@ -109,7 +113,9 @@ subjects ARE included here (the portal must see everything); the public endpoint
 ```
 
 - `effective` = what the app actually renders (defaults merged under the override).
-- `override` = only what SME explicitly set (`null` = pure defaults).
+- `override` = only what SME explicitly set (`null` = pure defaults). It may carry
+  `displayNameI18n` (`{ "hi": "…" }`) — the non-English labels.
+- `effective.displayNameByLanguage` = `{ en: <effective English>, ...displayNameI18n }`.
 - Default `displayName` strips a trailing `" Optional"` **only when the subject is
   actually optional**; default `iconKey` is auto-matched from the subject name.
 - Entries are sorted like the app (explicit `sortOrder` first — lower = earlier —
@@ -123,13 +129,15 @@ PUT /sme/filter-config/:examType/:subject
 ```
 | Body field | Type | Description |
 |---|---|---|
-| displayName | string \| null | Label shown in the app. `null` clears back to the default |
+| displayName | string \| null \| `{ [code]: string \| null }` | Label shown in the app. A plain string is ENGLISH; `null` clears English back to the default. A language map (`{ "en"?: …, "hi": … }`) merges per language and `null` clears just that language; keys must be catalogued codes (400 otherwise) |
 | iconKey | string \| null | One of `validIconKeys`. `null` clears back to the auto-derived icon |
 | hidden | boolean \| null | `true` removes the subject from the public filters. `null` clears (=visible) |
 | sortOrder | number \| null | Explicit position (lower first; subjects without one sort last, alphabetically). `null` clears |
 
 Field semantics: **omitted = untouched, `null` = clear, value = set.** Clearing every
-field removes the override entry entirely. Concurrent-safe (row-locked read-modify-write).
+field removes the override entry entirely — but `displayName: null` clears **English
+only**: a stored `displayNameI18n` keeps the entry alive until each of its languages is
+cleared too (`{ "displayName": { "hi": null } }`). Concurrent-safe (row-locked read-modify-write).
 
 ```json
 // PUT /sme/filter-config/mains/Law%20Optional
@@ -142,11 +150,12 @@ Response — the updated entry:
   "exam": "upsc-cse",
   "subject": "Law Optional",
   "isOptional": true,
-  "effective": { "displayName": "Law", "iconKey": "sme_polity", "hidden": false, "sortOrder": null },
+  "effective": { "displayName": "Law", "iconKey": "sme_polity", "hidden": false, "sortOrder": null, "displayNameByLanguage": { "en": "Law" } },
   "override": { "displayName": "Law", "iconKey": "sme_polity" }
 }
 ```
-Errors: **400** unknown `examType` or unknown `iconKey` (message lists the valid keys).
+Errors: **400** unknown `examType`, unknown `iconKey` (message lists the valid keys), an
+unknown language key in a `displayName` map, or an unknown `exam`.
 Audit: `FILTER_CONFIG_UPDATE` (before/after of just that subject's override).
 
 ## 3. Flip a mains subject between Optional and GS

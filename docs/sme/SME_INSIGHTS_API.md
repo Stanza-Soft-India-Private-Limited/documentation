@@ -47,6 +47,8 @@
 > Responses are RAW JSON — there is no {success,data} envelope; branch on HTTP status.
 > Every response carries meta.caveats: string[] (purchase-funnel: top-level caveats[])
 >   — surface it, do not drop it.
+> Every route here also takes includeInternal=1: internal accounts (staff domains, review
+>   demo logins, sandbox owners) are EXCLUDED by default and echoed as meta.includeInternal.
 > Render null as "not recorded yet" / "not derivable", never as 0 and never as a green tick.
 > Every /sme/analytics/* route takes an optional ?exam= — read §0.1 before wiring a filter.
 > These are review reads over the production DB: open-and-refresh pages, never polling tiles.
@@ -82,8 +84,8 @@ DTO interfaces declare them:
 // NOT { "success": true, "data": { … } }                  // ❌ never this
 ```
 
-Errors are the Nest default `{ statusCode, message }` from the global exception
-filter. (The one structured pass-through anywhere in this API is the 402 quota
+Errors come from the global exception filter: `{ success: false, message, error,
+statusCode, timestamp, path, method }`. (The one structured pass-through anywhere in this API is the 402 quota
 body; nothing here returns 402.)
 
 Every response carries a `meta` block. **Read it.** It states the window actually
@@ -96,8 +98,8 @@ behind an "i" on the panel rather than reprinting it in a deck. (`purchase-funne
 ## ⚠️ 0.1 `?exam=` — additive on every analytics route here
 
 Every `/sme/analytics/*` route — §2, §3, §4 and the new §5 — accepts an optional
-**`?exam=<slug>`** as of **2026-09-21**. `GET /sme/content/question-quality` (§1) does
-**not**; that gap is still open and is listed in §7.
+**`?exam=<slug>`** as of **2026-09-21**. `GET /sme/content/question-quality` (§1) takes it
+too (all three pools, unknown slug = 400, echoed as `meta.exam`).
 
 **Omit it and nothing changes.** The response is byte-identical to what the route has
 always returned: no new keys, no wrapper. **An unknown slug is a `400`** on every one
@@ -176,7 +178,7 @@ honest, the list just gets shorter.
 
 | Param | Default | Notes |
 |---|---|---|
-| `pool` | `both` | `content` \| `simulation` \| `both`. Every row carries its own `pool`. |
+| `pool` | `both` | `content` \| `simulation` \| `pyq` \| `both` (= ALL three banks). `pyq` scores `pyq_papers` from first attempts in `pyq_attempts`. Every row carries its own `pool`. |
 | `exam` | — | Exam mode slug, e.g. `appsc-group-1`. Matches that exam **or** the `*` (every-exam) sentinel. Omit to score every exam together. **Unknown slug = 400**, never a silently empty work queue. Max 64 chars. |
 | `subject`, `topic` | — | Exact match. content pool → `content_documents`; simulation pool → `simulation_questions`. |
 | `minAttempts` | `20` | 5–1000. Pushed into SQL as a `HAVING`. |
@@ -219,6 +221,13 @@ honest, the list just gets shorter.
   "meta": { "pools": ["content","simulation"], "exam": null, "minAttempts": 20, "candidateCapHit": false, "caveats": [ … ] }
 }
 ```
+
+> Abridged from an older capture. Today every item also carries a single **`verdict`**
+> (`worse_than_chance` · `contradicts_key` · `suspicious` · `ok`); `summary` adds
+> `contradictsKey`, `byVerdict`, `byPool`; `meta` adds `from`, `to`, `windowDays`,
+> `suspectRatePct`, `confidenceZ`, `sort`, `limit`, `includeInactive`, `includeInternal`,
+> `candidateCap`, `simulationAttemptCapHit` (`sme-content-quality.dto.ts`), and `pools`
+> lists `pyq` when that pool is in.
 
 `meta.exam` echoes the **resolved** slug — trimmed and lower-cased — or `null` when no
 `?exam=` was sent and the queue spans every exam. Render it: a work queue that silently
@@ -338,8 +347,8 @@ signal. Ship the screen with a `minAttempts` control defaulted low, and a filter
 `contradictsKey`.
 
 **Expect this to stay thin for a while, and say so on screen.** `attempts` counts *distinct
-users who answered*, and only content-doc MCQs and simulations — PYQ attempts live in Neo4j
-and are not here at all. An empty queue means "not enough answers yet", never "the content is
+users who answered*, over content-doc MCQs, simulation questions and PYQ (first attempts
+from `pyq_attempts`, the `pyq` pool). An empty queue means "not enough answers yet", never "the content is
 clean". Write that sentence into the empty state.
 
 ---
@@ -356,8 +365,8 @@ than 1.9?"* is one glance.
 
 ### ⚠️ `app_version IS NULL` is the pre-1.7 cohort, not missing data
 
-**Current store build is 2.0** (Android versionCode 27, iOS 2.0 build 3), released
-**2026-09-17**, so the ladder the version rows walk is now 1.6 → 1.7 → 1.8 → 1.9 → 2.0. The
+**When this was written the store build was 2.0** (Android versionCode 27, iOS 2.0 build 3),
+released **2026-09-17**; 2.1 has since shipped and 2.2 is due 2026-11-03. The ladder the version rows walk is now 1.6 → 1.7 → 1.8 → 1.9 → 2.0. The
 `app_version IS NULL` rule below is **unchanged** by that and stays exactly as written. Note
 also that `AppConfig.minAppVersion` on production is **1.0.0** — i.e. **no forced update is in
 effect**; this endpoint supplies the number you would use to decide on one, nothing more.
@@ -369,8 +378,10 @@ cohort a force-update decision is about. It is reported as its own row, labelled
 coerced to a string, or merged into a neighbour. `platform` is NULL on the same
 builds and is likewise kept separate rather than folded into ios/android.
 
-`platforms[].preHeaderSharePct` is the headline force-update number: *what share of
-this platform's active users are still on a build that predates the header*.
+The headline force-update number is now **`blockedIfRequire[]`**: per candidate version,
+the distinct mobile users whose latest request came from an older build — who would be
+locked out if `minAppVersion` were raised to it today — over `meta.forceUpdate.mobileUsers`.
+`platforms[].preHeaderSharePct` (the share still on a pre-header build) stays as context.
 
 ### ⚠️ Hard 30-day ceiling
 
@@ -444,6 +455,11 @@ unusable; compare crash rates with the exam filter **off**.
   "meta": { "windowDays": 14, "apiUsageRawRetentionDays": 30, "windowExceedsApiUsageRetention": false, "caveats": [ … ] }
 }
 ```
+
+> Today the body also carries `blockedIfRequire[]` (top level), each version/platform row
+> adds `clientErrorsByKind { authExpired, network, other }` (none of them is a crash — the
+> app reports no crashes to us), and `meta` adds `includeInternal`, `forceUpdate` and
+> `clientErrorKinds` (`sme-release-health.dto.ts`).
 
 With `?exam=` the same body gains exactly three things — `examCoverage` as a **sibling
 of `versions`/`platforms`** (not inside `meta`), and two `meta` keys:
@@ -668,7 +684,9 @@ user opens the in-app notification feed (the bell). Therefore:
 
 * `isRead = true` means **"the recipient opened the in-app feed at some point after
   this row was created"**. It does **not** mean the user tapped this push, saw this
-  push, or that the push was even delivered — **push delivery is not tracked at all**.
+  push, or that the push was even delivered — **push delivery is not tracked**. Per-push
+  opens have their own field, `byRule[].tapped` (`notification_dispatch.tapped_at`) — `null`
+  while `meta.taps.measured` is false, i.e. until an app build reports taps.
 * Nothing distinguishes "opened *because of* this notification" from "opened for an
   unrelated reason and swept 12 old rows read along the way".
 * Read-rate is therefore a property of the **recipient's habits** at least as much as
@@ -702,9 +720,8 @@ returns:
 
 Do **not** synthesise this client-side. Once there is enough post-migration history,
 `read_at − sent_at` becomes quotable as *"how long until this recipient came back to
-the app"* — never as *"how long until they opened this push"*. A true
-per-notification metric still needs an open event, which is not part of this
-endpoint.
+the app"* — never as *"how long until they opened this push"*. The per-notification
+open event is `byRule[].tapped` (rule sends only; null until a client reports taps).
 
 ### Maturation — why the rates aren't what you'd naively compute
 
@@ -770,16 +787,21 @@ a decision lands differently for one audience.
 }
 ```
 
+> Today the body also carries **`byRule[]`** (the same figures per notification rule, with
+> `ruleId`, `ruleName`, `triggerKey`, `types`, `tapped`, `recommendation`), and `meta` adds
+> `from`, `to`, `windowDays`, `typeFilter`, `minSent`, `poorReadRatePct`,
+> `includeInternal`, `taps` (`sme-notification-effectiveness.dto.ts`).
+
 `worstPerformers` is ordered by **`wastedSends`**, not by read-rate: the type that
 wasted the most sends is the one worth killing first. A 0%-read type sent 60 times
 matters less than a 15%-read type sent 4000 times.
 
 ### Caveats
 
-* `byType.sent` / `read` are **exact** (a DB-side aggregate). The per-day series,
-  the maturation split and `recipients` are built from the newest 20 000 rows in the
-  window — when that cap bites, `meta.dailyRowCapHit` is `true` and
-  `meta.dailySeriesCompleteFrom` says how far back the series is actually complete.
+* Every figure — `byType`, the per-day series, the maturation split, `recipients` — is a
+  **full-window SQL aggregate** since audit 2026-11 U2. Nothing is capped:
+  `meta.dailyRowCapHit` is always `false` and `meta.dailySeriesCompleteFrom` always `null`
+  (kept for shape compatibility).
 * `notification_history` has no index on `type` or on `createdAt` alone (only
   `(userId, createdAt)`), so this is a bounded sequential scan of the window. Review
   read, not a dashboard tile — do not poll it.
@@ -981,8 +1003,8 @@ answered is *"is this user past the psychometric gate?"*, not *"is this boolean
 true?"*. `detail` splits `completed` / `skippedOnly` / `withResultRow`.
 
 Stage 5 **reuses the ENGAGED union already defined in `SmeAnalyticsService`** rather
-than inventing a second definition of "active" — `simulation_attempts`,
-`user_content`, `user_question_attempts`, `custom_tasks` *(`source_id IS NULL` only —
+than inventing a second definition of "active" — seven sources: `simulation_attempts`,
+`user_content`, `user_question_attempts`, `pyq_attempts` *(since audit U9)*, `custom_tasks` *(`source_id IS NULL` only —
 rows with a source_id are auto-seeded planner content and would make everyone look
 converted)*, `psychometric_test_results`, `user_document_progress`. That means
 `/onboarding-funnel` and `/analytics/dau` can never disagree about what an engaged
@@ -1141,7 +1163,8 @@ Three things about it that will otherwise be read as bugs:
       "derivable": true, "minSignupsPerDay": 5,
       "worstDay": { "day": "2026-07-24", "signups": 18, "phoneVerified": 4, "phoneVerifiedPct": 22.2, "loginFailed": 12, "otpSendFailed": 3, "otpVerifyFailed": 47 },
       "medianOtpVerifyFailedPerDay": 2,
-      "note": "2026-07-24 (IST) had the worst phone-verification conversion: 4/18 (22.2%). That day saw 47 otp_verify_failed and 3 otp_send_failed events, against a per-day median of 2 otp_verify_failed — a spike worth chasing."
+      "note": "2026-07-24 (IST) had the worst phone-verification conversion: 4/18 (22.2%). That day saw 47 otp_verify_failed and 3 otp_send_failed events, against a per-day median of 2 otp_verify_failed — a spike worth chasing.",
+      "spikeRule": { "factor": "…", "minEvents": "…", "threshold": "…", "spiked": true, "definition": "…" }   // always present (U8)
     },
     "dailyRowCapHit": false, "identifierRowCapHit": false
   },
@@ -1383,9 +1406,11 @@ build rather than that the paywall failed. Branch on `paywallViewed`, not on the
   time** — a user who viewed the APPSC paywall in June and has since switched to UPSC
   counts today as a UPSC paywall view. `ordersPaid` does not share this weakness. So the
   per-exam rate has a **retro-attributed denominator** and an **exactly-attributed
-  numerator**: read it as directional, and read the all-exams number (omit `exam`) as the
-  exact one. The service ships exactly that sentence as the last `caveats` entry whenever
-  `exam` is supplied.
+  numerator**: read it as directional. There is **no all-exams funnel**: omitting `exam`
+  returns the `upsc-cse` funnel with `examDefaulted: true` (other exams' paid side is in
+  `byExam[]` / `allExams`). The service pushes the attribution sentence into `caveats` on
+  **every** call (since lane B7.5 it says there is no all-exams funnel), then a default-exam sentence when no `exam`, then the
+  internal-accounts sentence.
 
 ### What a good visualisation is
 
@@ -1393,11 +1418,11 @@ A **per-day stacked/step column** for the five client steps with `ordersPaid` as
 visually distinct mark — it is a different *kind* of fact, not a sixth step — and
 `conversionPct` as a **line on a secondary axis**. The line must show a **gap** where the
 value is `null` and must be allowed past **100**. The step-to-step loss is the subject:
-`paywallViewed → upgradeTapped` is the interest drop, `checkoutOpened →
-checkoutAbandoned` is the pricing/friction drop, and `purchaseFailed` beside them is the
-one that is *ours to fix*.
+`paywallViewed → upgradeTapped` is the interest drop; `checkoutAbandoned` = left the payment
+sheet (no reason is captured — §5.1), so do not label it a pricing drop; and `purchaseFailed`
+beside them is the one that is *ours to fix*.
 
-Render `caveats[]` on the panel. Six strings always, seven with `?exam=`.
+Render `caveats[]` on the panel: **9 strings without `exam`, 8 with it**.
 
 **The action that follows.** If the loss is at `upgradeTapped`, the paywall copy or price
 is the problem. If it is at `checkoutAbandoned`, the checkout is. If `purchaseFailed` is
@@ -1413,10 +1438,11 @@ These reads share the **production database the mobile app runs on**. So:
 * every query is bounded by a **date window** with a hard max, enforced even when the
   caller supplies an explicit `from`/`to`;
 * every aggregation carries a **row cap**, and the response reports when the cap bit
-  rather than silently truncating;
+  rather than silently truncating — **except §4 (notification effectiveness), which is a
+  full-window raw-SQL aggregate with no cap since audit U2**;
 * thresholds are pushed into SQL (`HAVING`) wherever possible so the DB, not Node,
   discards the tail;
-* §1–§4 are written through the **Prisma query builder**, not `$queryRaw` —
+* §1–§3 are written through the **Prisma query builder** (§4 is raw SQL since U2), not `$queryRaw` —
   column casing in this schema is mixed *per table*
   (`simulation_attempts."userId"/"startedAt"` quoted camelCase vs
   `user_question_attempts.user_id/created_at` snake_case) and a raw-SQL typo is a
@@ -1441,8 +1467,8 @@ These reads share the **production database the mobile app runs on**. So:
 | `notification_history` has no index on `(type, createdAt)` | §3 is a sequential scan | add the index |
 | `user_question_attempts` has no index on `updated_at`/`created_at` | §1 content pool is a sequential scan | add `@@index([updatedAt])` |
 | `simulation_answers` has no timestamp | §1 must fan out through `simulation_attempts` | add `createdAt` |
-| `simulation_attempts` has no index on `startedAt` | that fan-out is a sequential scan | add `@@index([startedAt])` |
-| Question quality does not read the exam dimension | the columns exist (`content_documents.examIds`; simulation questions via `simulations.examIds`) but §1 ignores them, so a mixed-exam pool is reported as one bank | **still open after `4cfe6c0`** — that commit added `?exam=` to all 17 pre-existing `/sme/analytics/*` routes (18 with §5), but `/sme/content/question-quality` is on a different controller and was untouched. Add the same filter through `examArraySql`. |
+| ~~`simulation_attempts` has no index on `startedAt`~~ | **closed** — `@@index([startedAt])` exists on `SimulationAttempt` | — |
+| ~~Question quality does not read the exam dimension~~ | **closed** — `?exam=` is implemented on all three pools (content `content_documents.examIds`, simulation via the parent simulations' `examIds`, pyq `pyq_papers.examIds`) | — |
 | **`auth_events` has no exam column and no relation to join one through** | three per-exam numbers cannot be honest: §2's `clientErrors` stays app-wide (`meta.clientErrorsExamScoped: false`), §4's whole `authEvents` block stays app-wide, and §5's five funnel steps have to borrow the user's *current* exam | a nullable `exam_id` on `auth_events`, stamped by the ingest endpoint from the `X-Exam` header. Only fixes it going forward — the same deploy-day floor as `api_usage.exam_id`. |
 | **No history of `user_profiles.active_exam_id`** | every person-keyed per-exam number is **retro-attributed**: a user, and everything they ever did, is counted under the exam they picked *today*. Worst on a newly-launched exam, where switchers are a large share of the population | an append-only `user_exam_switch` log, and read the exam *as of* the row's own timestamp. Until then the caveat is the fix. |
 | **`api_usage.exam_id` starts 2026-09-21** | there is **no per-exam usage history**, only a floor that begins on deploy day. `examCoverage.since` reports it rather than hiding it | nothing to fix — it ages out on its own. Do not backfill it by guessing `upsc-cse`; a NULL there genuinely means "not recorded". |

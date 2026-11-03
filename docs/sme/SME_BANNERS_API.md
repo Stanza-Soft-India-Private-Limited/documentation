@@ -151,7 +151,8 @@ own `examId`.
 > an SME off to re-upload artwork that already existed under the correct spelling.
 >
 > Handle the 400 in the list screen, and source slugs from `GET /sme/exams` rather than
-> free text. `status` is unvalidated by contrast — an unknown status simply matches nothing.
+> free text. `status` is validated too (`@IsIn` the banner statuses) — an unknown status is a
+**400**, not an empty list.
 
 **The list is unpaginated.** There is no `page`/`limit`; it returns every matching row as
 `{ data, total }`, ordered by `priority` descending then `startsAt` descending, and `total`

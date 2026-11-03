@@ -126,8 +126,10 @@ not built a trigger for. That is what keeps a one-off announcement from needing 
 
 ## 2. Copy and template variables
 
-Copy is language-keyed. Only `en` is populated today; adding another language later is a data
-edit, not a migration.
+Copy is language-keyed (`{ en: {title, body}, hi: {…} }`). Since 2026-10-30 a per-language
+copy map is accepted on create/PATCH and each recipient is sent the copy in their app UI
+language (`user_profiles.ui_language`, `hi-in` → `hi`), falling back to `en` (which every rule
+must have) — `RuleRunnerService.resolveRecipientLanguages`.
 
 ```json
 { "copy": { "title": "Don't break your {{streak}}-day streak", "body": "..." } }
@@ -136,8 +138,10 @@ edit, not a migration.
 **A test send now renders with the named user's REAL data** — their name, streak, last-7-day
 practice count and accuracy, days since their last attempt, their in-progress document, days to
 their exam. Anything genuinely not computable for that person (a plan name for someone who has
-never paid, a document for someone with none in progress) falls back to a representative sample,
-and the response lists exactly which variables were sampled in `sampledVars`. So a test answers
+never paid, a document for someone with none in progress) falls back to a representative sample.
+The response is `{ isTest, rendered: {title, body, deepLink} | null, recipients[], sent, failed,
+durationMs }` — it does **not** say which variables were sampled (that stays inside the
+runner; there is no `sampledVars` key). So a test answers
 the question it exists for: does this person's notification look right?
 
 ⚠️ **A test still bypasses the audience predicate**, so you can test a rule against someone who
@@ -479,7 +483,8 @@ paying for UPSC". `tier` answers the person-level question only.
 **Per-user send times** are not supported: a rule has one `sendAtIst` for everyone. The
 scheduler ticks every 15 minutes, so that is the granularity.
 
-**Language variants** are stored but not populated — every rule is English today.
+**Language variants** are live: a rule with `hi` copy sends it to recipients whose UI language
+is Hindi (since 2026-10-30, §2); everyone else gets `en`.
 
 ---
 

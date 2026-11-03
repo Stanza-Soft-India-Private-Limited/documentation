@@ -189,6 +189,10 @@ account-wide legacy view.
 }
 ```
 
+> ℹ️ **Captured 2026-09-21, before lanes B1/B3.** Every row now also carries `isInternal`,
+> `uiLanguage` (the app UI language, `null` = never chosen — filter with `language=`) and
+> `access[]` (§1.1a), and the page carries `examDefaulted`. The captured keys are unchanged.
+
 > ⚠️ **Row 1 above is a PRE-FIX capture. `isPremium: true` next to `premiumState: "Trial
 > Ended"` and `entitlements: []` is the bug this release fixes** — it was taken from
 > staging on 2026-09-21 minutes before the fix landed, and is kept because it is the
@@ -209,8 +213,11 @@ account-wide legacy view.
 >
 > **The portal guidance is unchanged, and still worth following:** use `premiumState` for
 > the funnel label and `entitlements[]` for "what does this person actually hold in exam
-> X". `isPremium` is person-level by design — true if they hold premium in **any** exam —
-> so it is the wrong field for a per-exam badge even now that it is correct.
+> X". `isPremium` is the person-level `user_auth` mirror: `true` for a `SUBSCRIBED` user
+> whose `premiumExpiresAt` is unset or in the future, **and also for an `ACTIVE` user
+> inside the trial window** of their own active exam (`upsc-cse` when unset) — it does not
+> look at `entitlements[]`. Read it as the UPSC-CSE-era state (top of this doc), never as a
+> per-exam badge.
 
 A row that *does* hold something — from `GET /sme/users?exam=appsc-group-1&premium=true`,
 which returns `total: 1` against the same 4-user population:
@@ -534,8 +541,9 @@ Audited as `TRIAL_EXTEND`.
 clock from signup, spanning every exam, so switching exams can never farm a second
 trial — but **how long** that window is belongs to the exam. The extension therefore
 applies to the person everywhere, while the end it stacks on is computed from the
-policy of the user's own `activeExamId` (`upsc-cse` when unset). **Nothing here is 14
-days by contract**; that is merely `upsc-cse`'s current length.
+policy of the user's own `activeExamId` (`upsc-cse` when unset). **Nothing here is a fixed
+number of days by contract**: `upsc-cse` was 14 days until 2026-09-25 and is **3 days** for
+signups since (its `trialPolicy`, SME_EXAMS_API §4); `appsc-group-1` is 0.
 
 The response carries two extra fields so the portal can explain a non-obvious number:
 `examId` (the exam whose policy produced `previousTrialEndsAt`) and `trialDays` (that
@@ -927,7 +935,10 @@ POST /sme/notifications/segment
 { "segment": "premium", "title": "…", "body": "…", "type": "home", "id": "optional",
   "exam": "appsc-group-1" }
 ```
-`segment` ∈ `premium` (active paid) / `trial` (active free trial) / `free` (everyone else).
+`segment` ∈ `premium` (holds a live entitlement — paid **or** staff comp) / `trial` (active
+free trial) / `free` (everyone else). **Size it first, without sending:**
+`GET /sme/notifications/segment/count?segment=&exam=` → `{ matchedUsers, segment, exam,
+examDefaulted }`, the same audience method as the send (lane B6.4).
 **2026-11 (B3.2 + owner rule):** the cohorts are the §1.1a access axis collapsed —
 `premium` = holds a **live** entitlement (`paid` ∪ `comped`, incl. the legacy mapping),
 `trial` = access `trial` (each exam's own trial length — it was a fixed 14 days for
@@ -972,8 +983,10 @@ with the audience the server actually used.
 does not reach UPSC aspirants. Omit it to reach the whole cohort — exactly the previous
 behaviour. Matching is on the user's last switcher choice, and **`exam: "upsc-cse"` also
 matches every user who has never touched the switcher** (an unset preference means UPSC),
-which is the same rule `GET /sme/users?exam=` uses. The three cohorts themselves stay
-**person-level** (the `user_auth` mirror): "premium" means holds premium *somewhere*.
+which is the same rule `GET /sme/users?exam=` uses. The cohorts are NOT read from the
+`user_auth` mirror: they come from `user_exam_entitlements` + each exam's trial clock, and
+with `exam` sent `premium` = a live entitlement in **that** exam (without `exam`: in any
+exam).
 
 > ✅ **Corrected 2026-09-21 — this parameter is now validated** like every other
 > `?exam=` in this doc: an unknown slug is a **400**, not a send to nobody reported as

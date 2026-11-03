@@ -12,7 +12,10 @@ surface.
 **Base URL:** `{{BASE_URL}}/api/v1` (prod `https://app.stanzasoft.ai`)
 **Auth:** `x-api-key: <API_KEY_SECRET>` on every request · **Swagger:** `/api/docs` (group **SME**)
 **All endpoints** accept `?days=30` (default 30, max 120) and optional `?startDate=&endDate=`,
-plus an optional **`?exam=<slug>`** — see §0b, and read it before you draw a per-exam chart.
+plus an optional **`?exam=<slug>`** — see §0b, and read it before you draw a per-exam chart —
+and **`?includeInternal=1`**: every route EXCLUDES internal accounts (staff domains, the
+store-review demo logins, App Store sandbox owners) by default since lane B2.7, and echoes
+`includeInternal`.
 **Dates (2026-11, lane B6.3):** a bare `YYYY-MM-DD` is an **IST calendar day** — `startDate`
 from that day's 00:00 IST, `endDate` through the **whole** end day (bound = next 00:00 IST,
 exclusive), so `startDate=endDate=D` is exactly day D. A full ISO timestamp is taken literally
@@ -27,7 +30,7 @@ All day-bucketing is **IST** (UTC+5:30). Counts are integers; rates are percenta
 
 | | **Plane A — app tables (live)** | **Plane B — `api_usage` capture** |
 |---|---|---|
-| Source | the app's own tables (simulation, MCQ, psychometric, doc-reading, AI-content, planner, signups, devices, notifications) | a new per-request capture table written by a global interceptor |
+| Source | the app's own tables (simulation, MCQ, **PYQ practice (`pyq_attempts`)**, psychometric, doc-reading, AI-content, planner, signups, devices, notifications; MCQ and doc-reading also count a later re-touch — `updated_at > created_at` — as one more event) | a new per-request capture table written by a global interceptor |
 | History | **full, immediately** (read live each call; never purged) | **deploy-day forward only**; raw kept 30d, rollup kept 120d, then purged |
 | Powers | engaged-DAU, per-feature usage, signups, retention, premium-vs-free, content, platforms, notifications | true app-wide DAU, per-endpoint usage, heatmap, paywall (402) hits |
 
@@ -43,9 +46,13 @@ Every route in this doc — §1–§4, the three insight routes in §4b and the 
 accepts an optional **`?exam=<slug>`** (slugs come from `GET /sme/exams`; the default exam is
 `upsc-cse`). Four rules, then the per-route table.
 
-**1. It is purely additive.** Omit it and the response is **byte-identical** to what the route
-has always returned — no new keys, no wrapper, no extra aggregate. An existing portal build
-keeps working untouched. An **unknown slug is a `400`**, never a silently empty chart: on a
+**1. It is additive — but omitting it is no longer byte-identical** (2026-11, owner decision).
+Without `exam` the bodies still gained keys: `summary` → `includeInternal` + `money`; `users` →
+`windowDays`, `premiumExamId`, `examDefaulted`, `includeInternal` (rows: `isInternal`,
+`daysStudied`, `sessions`, `minutesInApp`); `premium-engagement` → answers for **`upsc-cse`**
+with `examId`, `examDefaulted`, `windowDays`, `byExam[]`; `retention` / `churn-risk` /
+`content` / `notifications` → `windowDays` / `includeInternal` (and their own additions, below).
+Existing keys keep their names, so an older portal build keeps working. An **unknown slug is a `400`**, never a silently empty chart: on a
 management screen "0 users" and "you typo'd the slug" look identical and only one is worth
 acting on.
 
@@ -167,8 +174,8 @@ sandbox, unknown }` beside it. Field list and the portal cards it replaces:
 `?exam=` — MIXED, same split as `summary`, and the array is **wrapped**: `{ data: [...], examCoverage }`. `examCoverage.since` is an **IST `YYYY-MM-DD`** here (rollup grain). The per-exam `activeDau` line legitimately starts later than the per-exam `engagedDau` line.
 
 ### `GET /sme/analytics/features?days=30`
-`[{ feature, users, actions }]` — features: `simulation, mcq, doc_reading, psychometric, ai_flashcard, ai_mnemonic, ai_revision, planner`. (`planner` counts only genuine user-created tasks; auto-seeded rows are excluded.)
-`?exam=` — PERSON. Despite reading the same six domain tables the DAU series does, this one has **full per-exam history**: no `api_usage`, so no `examCoverage` and no deploy-day floor.
+`[{ feature, users, actions }]` — features: `simulation, mcq, pyq, doc_reading, psychometric, ai_flashcard, ai_mnemonic, ai_revision, planner` (`pyq` = PYQ practice, audit U6). (`planner` counts only genuine user-created tasks; auto-seeded rows are excluded.)
+`?exam=` — PERSON. Despite reading the same seven domain tables the DAU series does, this one has **full per-exam history**: no `api_usage`, so no `examCoverage` and no deploy-day floor.
 
 ### `GET /sme/analytics/users?days=30&page=1&limit=20&search=&sort=lastSeen`
 Paginated `{ data, total, page, limit, hasMore, windowDays, premiumExamId, examDefaulted, includeInternal }`;
@@ -201,10 +208,10 @@ mirror.
 ### `GET /sme/analytics/signups?days=30` → `[{ day, newUsers }]`
 `?exam=` — PERSON. ⚠️ **Retro-attributed**: a signup is counted under the exam the user has picked *today*, not the one they saw on signup day (§0b rule 4).
 ### `GET /sme/analytics/retention?days=30`
-`{ cohortSize, d1, d7, d30, d1Pct, d7Pct, d30Pct }` — of users who signed up in the window, how many were active ≥1/7/30 days after signup.
+`{ cohortSize, d1, d7, d30, d1Pct, d7Pct, d30Pct, d1Cohort, d7Cohort, d30Cohort, definition, windowDays, includeInternal }` — ring N is over the users **old enough** to have reached day N (signed up in [start − N, end − N]; that count is `dNCohort`), and `dN` of them were active ≥ N days after signup; `dNPct = dN ÷ dNCohort`. `cohortSize` = signups inside the window, context only (audit U4 — a 30-day window used to make D30 zero by construction).
 `?exam=` — PERSON; narrows the **cohort** only. The activity test is unchanged: a user's actions all belong to them whatever exam they are in.
 ### `GET /sme/analytics/churn-risk?inactiveDays=14&page=1&limit=20`
-Paginated; users active within 90 days but **silent for ≥`inactiveDays`**. Rows `{ id, email, name, phoneNumber, lastActivity }`.
+Paginated; users who studied within 90 days but have **neither studied nor opened the app** (`sessions.lastAccessedAt`) for ≥`inactiveDays` (audit U6). Rows `{ id, email, name, phoneNumber, lastActivity, lastOpenedAt, isInternal }`; body adds `inactiveDays`, `includeInternal`.
 `?exam=` — PERSON; narrows both the page and `total`.
 
 ---
@@ -212,15 +219,16 @@ Paginated; users active within 90 days but **silent for ≥`inactiveDays`**. Row
 ## 3. Monetization × Engagement
 
 ### `GET /sme/analytics/premium-engagement?days=30`
-`[{ tier, users, activeUsers, totalActions, avgActionsPerActiveUser }]` for `tier ∈ premium|free` (premium = `premiumExpiresAt > now`).
+`[{ tier, users, activeUsers, totalActions, avgActionsPerActiveUser, examId, examDefaulted, windowDays, includeInternal, byExam[] }]` for `tier ∈ premium|free` (premium = a **live entitlement in the selected exam**; both tiers always present).
 
-⚠️ **`?exam=` changes what "premium" MEANS on this route.** The shape is identical; the
-definition is not.
+⚠️ **"premium" is ALWAYS per exam on this route** (owner ruling 2026-11-03). Without `exam`
+the answer is **`upsc-cse`** (`examDefaulted: true`); `byExam[]` carries the same tier for
+every active exam. The person-level mirror is never the test.
 
 | | **without `?exam=`** | **with `?exam=`** |
 |---|---|---|
-| Population | every `user_auth` row | the exam's PEOPLE (`active_exam_id`, NULL ≡ `upsc-cse`) |
-| `tier: "premium"` | the **person-level mirror** `user_auth.premium_expires_at > now` | a **LIVE ENTITLEMENT ROW** in *that exam* (`user_exam_entitlements`, the shared `liveEntitlementWhere`) |
+| Population | `upsc-cse`'s PEOPLE (`active_exam_id`, NULL ≡ `upsc-cse`) | the exam's PEOPLE (`active_exam_id`, NULL ≡ `upsc-cse`) |
+| `tier: "premium"` | a **LIVE ENTITLEMENT ROW** in `upsc-cse` | a **LIVE ENTITLEMENT ROW** in *that exam* (`user_exam_entitlements`, the shared `liveEntitlementWhere`) |
 
 The mirror flips to subscribed on **any** purchase, so without the switch an exam-scoped call
 would report every APPSC buyer as a premium UPSC user. The consequence, stated so it is not
@@ -261,9 +269,10 @@ plus a `comparison` against the next-older build (`verdict ∈ better|worse|simi
 and a per-platform rollup with `preHeaderSharePct`. Supplies the number behind an
 `AppConfig.minAppVersion` force-update decision.
 ⚠️ `app_version IS NULL` **is** the pre-1.7 cohort (the header shipped with 1.7) and is
-reported as its own labelled bucket — never dropped. Current store build is **2.0** (Android 27,
-iOS 2.0 build 3, released 2026-09-17); `AppConfig.minAppVersion` on production is **1.0.0**, so
-no forced update is in effect. ⚠️ `app_version`/`platform`/`status`
+reported as its own labelled bucket — never dropped. When this was written (2026-09-21) the
+store build was **2.0** (Android 27, iOS 2.0 build 3, released 2026-09-17) and production
+`AppConfig.minAppVersion` was **1.0.0**; app 2.1 has since shipped and 2.2 is due 2026-11-03.
+Read the current `minAppVersion` from app config, not from this doc. ⚠️ `app_version`/`platform`/`status`
 exist only on **raw** `api_usage`, so the window is hard-capped at **30 days**.
 
 `?exam=` — REQUEST (`api_usage.exam_id`). Adds a **top-level `examCoverage`** (beside
@@ -280,10 +289,13 @@ Per notification `type` and per IST day: `sent, read, maturedSent, maturedRead,
 maturedReadRatePct, pending, wastedSends, recipients`, plus an explicit
 `worstPerformers` kill-list ranked by wasted sends.
 ⚠️ **`isRead` is a bulk "opened the in-app feed" flag** set by `markFeedSeen`
-(`POST /notifications/feed/seen`) — **not** a per-push open, and push delivery is not
-tracked at all. ⚠️ **Time-to-read is derivable only from 2026-07-23 onward.** A `read_at` column was
-added that day and `markFeedSeen` now stamps it, but rows marked read BEFORE that have
-`read_at = NULL`. Never read NULL as "instant" — it means "read before we recorded when". Rates are quoted on a **matured** sample only (default: rows ≥3 days old).
+(`POST /notifications/feed/seen`) — **not** a per-push open, and push *delivery* is not
+tracked. Per-push **opens** have a slot: `byRule[].tapped` (from `notification_dispatch.tapped_at`)
+with `meta.taps.measured` — but `tapped` is `null` while no shipped client reports taps (none
+does yet). ⚠️ **Time-to-read is not derivable:** the response's `timeToRead` is always
+`{ derivable: false, reason }`. `read_at` (added 2026-07-23) is stamped by the same BULK
+`markFeedSeen`, so it is a feed-open time, not this notification's read time, and rows read
+before the column shipped are `NULL` — never synthesise it client-side. Rates are quoted on a **matured** sample only (default: rows ≥3 days old).
 
 `?exam=` — PERSON, matched on the **recipient's** `active_exam_id` (NULL ≡ `upsc-cse`). Adds
 `meta.examFilter` and one caveat; **no `examCoverage`** (nothing here is `api_usage`-sourced).
@@ -331,16 +343,20 @@ The narrative — why it exists, how to visualise it, the three ways it gets mis
 | Param | Default | Notes |
 |---|---|---|
 | `days` | `30` | Clamped to **1..90** — `auth_events` is purged at 90 days, so a longer window would lose its own tail. |
-| `exam` | — | Optional slug; unknown → `400`. |
+| `exam` | `upsc-cse` | Optional slug; unknown → `400`. **Omitted → the `upsc-cse` funnel** with `examDefaulted: true` (there is no all-exams funnel; other exams' paid side is in `byExam[]` / `allExams`). |
+| `from` / `to` | — | Custom window, IST calendar days (`to` inclusive), both together, ≤ 90 days; overrides `days`. |
+| `includeInternal` | `false` | Internal accounts are excluded from every step and from `ordersPaid` unless `1`. |
 
 **Steps.** The five funnel steps are `count(DISTINCT user_id)` per IST day over
 `auth_events.event_type ∈ paywall_viewed, upgrade_tapped, checkout_opened, checkout_abandoned,
 purchase_failed`. **Distinct users, not event rows** — a paywall re-renders and a checkout sheet
 gets reopened; counting rows would make `paywallViewed` a function of how chatty the build is,
 and the conversion rate would fall every time the UI got more responsive.
-`ordersPaid` is **server truth** from `orders` (`status = PAID`, `is_test = false` — iOS sandbox
-purchases hit production and are excluded from every money surface), bucketed by the order's own
-IST creation day.
+`ordersPaid` is **server truth** from `orders`: **FIRST real payments only** — `status = PAID`,
+`is_test = false` (iOS sandbox purchases hit production and are excluded from every money
+surface), not a staff comp (MANUAL → `comps`), not a renewal (a later charge of the same Apple
+original transaction / UPI AutoPay mandate → `renewals`) — bucketed by the order's own IST
+creation day.
 
 **`conversionPct` = `ordersPaid ÷ paywallViewed × 100`, one decimal.** Two rules that will
 otherwise be read as bugs:
@@ -358,32 +374,47 @@ otherwise be read as bugs:
 (`active_exam_id`, NULL ≡ `upsc-cse`) — not the exam whose paywall they were looking at.
 `ordersPaid` does **not** share this weakness: `orders.exam_id` records the exam the money
 actually bought. So a per-exam `conversionPct` mixes a **retro-attributed denominator** with an
-**exactly-attributed numerator** — read it as directional, and read the all-exams number (omit
-`exam`) as the exact one. The service ships that sentence verbatim as the last entry of
-`caveats` whenever `exam` is supplied.
+**exactly-attributed numerator** — read it as directional. There is no all-exams funnel: omitting `exam` returns the `upsc-cse`
+funnel (the caveat string says so since lane B7.5; it used to call the no-`exam` number the
+"exact" all-exams one). The service pushes that sentence into `caveats` on
+**every** call, followed by a default-exam sentence (only when no `exam`) and an
+internal-accounts sentence (always): **8 caveats with `exam`, 9 without**.
 
-<!-- captured from staging 2026-09-21, backend f6329e6 -->
+<!-- re-captured from staging 2026-11-03 over HTTP (lane B7) -->
 `GET /sme/analytics/purchase-funnel?exam=appsc-group-1&days=3` — verbatim, complete
-except that the seven `caveats` strings are shown as `"…"` (they are reproduced in full
-just below):
+except that the long `peopleNote` and the eight `caveats` strings are shown as `"…"`
+(the caveats are listed just below):
 
 ```json
 {
   "exam": "appsc-group-1",
+  "examDefaulted": false,
   "days": 3,
+  "window": { "from": "2026-10-31T18:30:00.000Z", "to": "2026-11-03T14:51:11.891Z" },
+  "includeInternal": false,
   "series": [
-    { "day": "2026-09-21", "paywallViewed": 0, "upgradeTapped": 0, "checkoutOpened": 0,
-      "checkoutAbandoned": 0, "purchaseFailed": 0, "ordersPaid": 0, "conversionPct": null },
-    { "day": "2026-09-20", "paywallViewed": 0, "upgradeTapped": 0, "checkoutOpened": 0,
-      "checkoutAbandoned": 0, "purchaseFailed": 0, "ordersPaid": 0, "conversionPct": null },
-    { "day": "2026-09-19", "paywallViewed": 0, "upgradeTapped": 0, "checkoutOpened": 0,
-      "checkoutAbandoned": 0, "purchaseFailed": 0, "ordersPaid": 0, "conversionPct": null }
+    { "day": "2026-11-03", "paywallViewed": 0, "upgradeTapped": 0, "checkoutOpened": 0,
+      "checkoutAbandoned": 0, "purchaseFailed": 0, "ordersPaid": 0, "renewals": 0, "comps": 0,
+      "conversionPct": null },
+    { "day": "2026-11-02", "paywallViewed": 0, "upgradeTapped": 0, "checkoutOpened": 0,
+      "checkoutAbandoned": 0, "purchaseFailed": 0, "ordersPaid": 0, "renewals": 0, "comps": 0,
+      "conversionPct": null },
+    { "day": "2026-11-01", "paywallViewed": 0, "upgradeTapped": 0, "checkoutOpened": 0,
+      "checkoutAbandoned": 0, "purchaseFailed": 0, "ordersPaid": 0, "renewals": 0, "comps": 0,
+      "conversionPct": null }
   ],
   "totals": {
-    "paywallViewed": 0, "upgradeTapped": 0, "checkoutOpened": 0,
-    "checkoutAbandoned": 0, "purchaseFailed": 0, "ordersPaid": 0, "conversionPct": null
+    "paywallViewed": 0, "upgradeTapped": 0, "checkoutOpened": 0, "checkoutAbandoned": 0,
+    "purchaseFailed": 0, "ordersPaid": 0, "renewals": 0, "comps": 0, "conversionPct": null
   },
-  "caveats": ["…", "…", "…", "…", "…", "…", "…"]
+  "people": {
+    "paywallViewed": 0, "upgradeTapped": 0, "checkoutOpened": 0, "checkoutAbandoned": 0,
+    "purchaseFailed": 0, "paid": 0, "conversionPct": null
+  },
+  "peopleNote": "…",
+  "byExam": [ { "examId": "appsc-group-1", "ordersPaid": 0, "renewals": 0, "comps": 0, "paidPeople": 0 } ],
+  "allExams": { "ordersPaid": 0, "renewals": 0, "comps": 0, "paidPeople": 0 },
+  "caveats": ["…", "…", "…", "…", "…", "…", "…", "…"]
 }
 ```
 
@@ -394,16 +425,19 @@ just below):
 > will see on any quiet exam-day slice, and it must render as *"no data"*, not as
 > *"0% conversion"*.
 >
-> `caveats` came back with **7 entries** (6 base + the exam one). The full text of all
-> seven, verbatim from the same response:
+> `caveats` came back with **8 entries** (6 base + the exam-attribution one + the
+> internal-accounts one; a call without `exam` adds a default-exam sentence = 9). Entries
+> 1–3, 5–7 below are verbatim from the 2026-09-21 capture and unchanged; 4 and 8 are from
+> the 2026-11-03 capture:
 >
 > 1. *"The five funnel steps are CLIENT-emitted (paywall_viewed / upgrade_tapped / checkout_opened / checkout_abandoned / purchase_failed, posted to the public diagnostics ingest endpoint). A build that does not emit them is invisible here, so every step is a FLOOR and a rising conversionPct can mean emitter adoption rather than a better paywall."*
 > 2. *"Each step counts DISTINCT USERS inside its IST day, not event rows — a paywall that re-renders, or a checkout sheet reopened three times, is one user. Window `totals` sum those per-day distinct counts, so a user active on three days counts three times."*
 > 3. *"auth_events rows with a NULL user_id (a pre-auth or logged-out emission) cannot be attributed to a person and are EXCLUDED from every step. They are not zero; they are unattributable."*
-> 4. *"ordersPaid is server truth from `orders` (status PAID, is_test = false — iOS sandbox purchases hit production and are excluded from every money surface), bucketed by the order's own IST creation day. It is NOT joined to the events, so conversionPct can exceed 100% when someone buys without a recorded paywall view."*
+> 4. *"ordersPaid is server truth from `orders`: FIRST real payments only — status PAID, is_test = false (iOS sandbox purchases hit production and are excluded from every money surface), NOT a staff comp (payment_source MANUAL, reported separately as `comps`) and NOT a renewal (…reported separately as `renewals`). Bucketed by the order's own IST creation day. It is NOT joined to the events, so conversionPct can exceed 100% when someone buys without a recorded paywall view."*
 > 5. *"conversionPct is NULL, never 0, on a day with no recorded paywall views — \"no denominator\" and \"converted nobody\" are different facts."*
 > 6. *"auth_events rows are purged after 90 days by the nightly job, which is why the window caps there."*
 > 7. *"auth_events rows carry NO exam of their own. With `exam` supplied, an event is attributed to the exam the user has picked AT QUERY TIME (user_profiles.active_exam_id, NULL ≡ upsc-cse) — not to the exam whose paywall they were actually looking at. …"* (continues with the `orders.exam_id` counterpoint quoted in the paragraph above)
+> 8. *"Internal accounts (staff email domains, the store-review demo logins, App Store sandbox testers) are EXCLUDED from every step and from ordersPaid. Pass includeInternal=1 to count them."*
 
 **A constructed illustration of the two awkward shapes** — *not* a capture, because
 staging has no paywall traffic to produce them, but both are reachable and both must
@@ -446,7 +480,9 @@ the chart above it; a window-wide distinct count would not add up to the series.
 ## 7. Auth diagnostics + api_usage client context (raw tables)
 
 Two additive data sources landed for auth-failure triage and per-device attribution.
-No SME endpoint reads them yet (that's a later module) — query the raw tables directly.
+SME endpoints now read `auth_events`: release-health, the onboarding funnel, the purchase
+funnel (+ its people list), the `/sme/users` sittings and the per-user activity trail. The
+raw tables below remain the ground truth for ad-hoc triage.
 
 ### `auth_events` — pre-auth + auth-lifecycle sink
 Written by the **@Public** `POST /diagnostics/auth-events` ingest (mobile emitters).

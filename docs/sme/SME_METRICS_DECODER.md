@@ -2,6 +2,7 @@
 
 > Changed 2026-09-21 — stale-text pass (telemetry live in 2.0, version ladder, links). Exam-dimension changes follow in [WHAT_CHANGED_2026-09-21.md](./WHAT_CHANGED_2026-09-21.md).
 > Changed 2026-09-21 — ?exam= on every analytics route, examCoverage, purchase-funnel (see [WHAT_CHANGED_2026-09-21.md](./WHAT_CHANGED_2026-09-21.md)).
+> Changed 2026-11-03 — stale-sentence pass (lane B7) after the November lanes: B1 money contract (per-exam `summary.money`, first payments vs renewals/comps), B2.7 internal accounts excluded by default on every analytics route (`includeInternal=1` opts in), audit fixes U2/U4/U6/U7/U8/U9 (PYQ practice counted, retention cohorts, churn needs no app-open, release-health client-error split, notification FX uncapped), B6 IST dates + users-row engagement fields. Details: [WHAT_CHANGED_2026-11.md](./WHAT_CHANGED_2026-11.md).
 
 **What this is:** one line per number on every SME screen — what it literally counts, and what it does *not*.
 Written so you can answer "what is this number?" in a meeting without opening code.
@@ -18,7 +19,7 @@ There are **three separate data planes**. Nothing reconciles them, and that is b
 
 | Plane | Where it comes from | Covers | Retention |
 |---|---|---|---|
-| **A — Domain tables** ("engaged") | 6 real product tables: `simulation_attempts`, `user_content`, `user_question_attempts`, `custom_tasks` (only where `source_id IS NULL`), `psychometric_test_results`, `user_document_progress` | Only *genuine actions*. A user who opened the app and scrolled is invisible. | Full history |
+| **A — Domain tables** ("engaged") | 7 real product tables: `simulation_attempts`, `user_content`, `user_question_attempts`, `pyq_attempts` (PYQ practice, since audit U6), `custom_tasks` (only where `source_id IS NULL`), `psychometric_test_results`, `user_document_progress` — plus a later re-touch (`updated_at > created_at`) of an MCQ answer or a document as one more event | Only *genuine actions*. A user who opened the app and scrolled is invisible. | Full history |
 | **B — Request capture** ("active") | `api_usage` (raw) + `api_usage_daily` (rollup) | Every **authenticated** API call. Public routes, `x-api-key` routes and webhooks are skipped. | **raw = 30 days**, rollup = long |
 | **C — Billing/user tables** | `user_auth`, `orders`, `payments`, `payment_events` | Money + account state | Full history |
 
@@ -39,7 +40,7 @@ columns** and no two of them answer the same question.
 |---|---|---|---|---|
 | 1 | **What the person is studying** | `user_profiles.active_exam_id` | **as of right now**, retroactively applied to their whole history | A June signup who switched to APPSC last week is a **June APPSC signup**. There is no switcher history and never was. |
 | 2 | **What the person has bought** | a live row in `user_exam_entitlements` | per exam, exact | An APPSC subscriber who is *studying* UPSC is **premium in APPSC and free in UPSC**, both at once. |
-| 2b | **The person-level premium mirror** | `user_auth.premium_expires_at` / `status` | the person, not the exam | Flips on **any** purchase. This is what "premium" means with **no** `?exam=`, so the un-filtered premium count is **≥** the sum of the per-exam ones. |
+| 2b | **The person-level premium mirror** | `user_auth.premium_expires_at` / `status` | the person, not the exam | Flips on **any** purchase. Since 2026-11 it is **no longer** what "premium" means with no `?exam=`: the users list's `isPremium` and premium-engagement then use a live **`upsc-cse`** entitlement (`examDefaulted: true`). Only `premiumExpiresAt` on a row is still the mirror. |
 | 3 | **Which exam the request was made in** | `api_usage.exam_id` / `api_usage_daily.exam_id` | per request, **only from 2026-09-21** | Everything before that deploy is **NULL = unknown**, excluded from every exam. Per-exam usage history simply does not exist yet. |
 | 4 | **Which exam the content is for** | `exam_ids` / `examIds` arrays (`*` = all) | per document | A `*`-tagged document counts for **every** exam, so per-exam content numbers sum **above** the total. |
 
@@ -62,16 +63,16 @@ you which you are holding (`examCoverage` = request-sourced).
 
 ## 1. Analytics screen (`/analytics`)
 
-Powered by `GET /sme/analytics` — but this endpoint is **built by the portal**, not by us. It pulls the full `/sme/users`, `/sme/orders` and `/sme/transactions` lists and adds them up in Python. **[portal-side]**
+Powered by `GET /sme/analytics` — **built by the portal**, which pulls our `/sme/users`, `/sme/orders` and `/sme/transactions` lists. **Since portal v2.46.0 the money cards come from OUR `GET /sme/analytics/summary` → `money`** (per exam, all-time: real paid orders, CAPTURED INR, no comps / sandbox / internal; `money.byExam[]`, `money.allExams`) — see WHAT_CHANGED_2026-11 §B1.3. **[portal-side for the rest]**
 
 ### KPI cards
 
 | Card | What it is | Watch out |
 |---|---|---|
-| **Total Users** | Count of every row in `user_auth`. | ⚠️ Portal fetches at most **6,000 users** (100/page × 60 pages). Past 6,000 this card silently stops growing — and so does every other number on this screen. |
-| **Premium Access** | Users with premium *access right now* = `SUBSCRIBED` and not expired, **OR** `ACTIVE` and still inside their trial window. | Includes trials. This is "who can use paid features", not "who paid". ⚠️ **The trial window is per exam, not 14 days** (APPSC Group 1 is currently 0) — corrected 2026-09-21; before that this number used a fixed 14 days for everyone and over-counted on any exam with a shorter trial. |
-| **Paying Subscribers** | The `premiumState = 'Premium'` bucket = `SUBSCRIBED` and not expired. | The honest revenue-side number. Always ≤ Premium Access. |
-| **Revenue (captured)** | Sum of `CAPTURED` payment amounts, in ₹, **excluding** `MANUAL` grants. | Manual comps are shown separately in "Revenue by source" so the headline isn't inflated by free grants. ⚠️ This sums the **payment** ledger, not paid orders — see the note below. |
+| **Total Users** | Count of every row in `user_auth`. | The portal pages up to `SME_FETCH_MAX_PAGES = 400` (40,000 rows) and shows an amber "incomplete — treat as a floor" banner from `coverage` when a list is truncated or a page failed. |
+| **Premium Access** *(card removed in portal v2.46.0 — no account-wide "premium")* | Users with premium *access right now* = `SUBSCRIBED` and not expired, **OR** `ACTIVE` and still inside their trial window. | Includes trials. This is "who can use paid features", not "who paid". ⚠️ **The trial window is per exam, not 14 days** (APPSC Group 1 is currently 0) — corrected 2026-09-21; before that this number used a fixed 14 days for everyone and over-counted on any exam with a shorter trial. |
+| **Paying Subscribers** | Now `summary.money.payingPeople` per exam ("Paying on UPSC") — distinct people with a real paid order in that exam. | Per exam, never a bare account-wide count. |
+| **Revenue (captured)** | Now `summary.money.revenuePaise` per exam: CAPTURED payments on real paid orders (not MANUAL comps, not sandbox, internal excluded), INR only, gross of refunds. | Comps are reported separately (`money.comps.notionalPaise`, "comped, not received"); non-INR Apple storefronts are counted in `nonInrOrders`, never summed. |
 | `x% onboarded` | Share of users with `user_profiles.onboarding_completed = true`. | Current state, not a cohort. |
 | `x% of users` (on Premium Access) | Premium Access ÷ Total Users. | |
 | `x% success` (on Revenue) | Captured payments ÷ all payment rows. | Denominator includes `CREATED`/`FAILED` attempts, so a user retrying three times drags it down. |
@@ -105,7 +106,7 @@ Powered by `GET /sme/analytics` — but this endpoint is **built by the portal**
 | **Apple revenue** | ₹ on `PAID` orders with `paymentSource = APPLE`. | Includes renewals; each renewal is its own order. |
 | **Subscribers** | Distinct `userId` across those paid Apple orders. | Lifetime distinct, not "currently subscribed". |
 | **Paid orders (incl. renewals)** | Count of those orders. | |
-| **Events recorded** | Rows in the `payment_events` ledger. | ⚠️ **Currently wrong — this counts Razorpay events too.** The portal asks for `?source=APPLE` but its HTTP client overwrites the query string with `page`/`limit`, so the filter is dropped. See §8. |
+| **Events recorded** | Apple rows in the `payment_events` ledger. | Fixed in the portal (`source=APPLE` passed as a param, then filtered to `apple.*`). Our `summary.money.appleEvents` splits them `production` / `sandbox` / `unknown` (cross-exam — a notification carries no exam). |
 | **New / Renewals / Billing issues / Expired / Refunds** | Apple notification types: `SUBSCRIBED`+`OFFER_REDEEMED` / `DID_RENEW`+`RENEWAL_EXTENDED` / `DID_FAIL_TO_RENEW` / `EXPIRED`+`GRACE_PERIOD_EXPIRED` / `REFUND`+`REVOKE`. | These five *are* correct — they match on an `apple.` prefix, so the leaked Razorpay rows don't affect them. Only the "Events recorded" total is polluted. |
 
 ### Month bars
@@ -138,14 +139,14 @@ Two lines per IST day: **engaged** (plane A, full history) and **active** (plane
 
 | Number | What it is | Watch out |
 |---|---|---|
-| **actions** | Row count per feature in the window: `simulation`, `mcq`, `doc_reading`, `psychometric`, `ai_<type>`, `planner`. | `planner` counts only user-created tasks (`source_id IS NULL`), never auto-seeded ones. |
+| **actions** | Row count per feature in the window: `simulation`, `mcq`, `pyq`, `doc_reading`, `psychometric`, `ai_<type>`, `planner`. | `planner` counts only user-created tasks (`source_id IS NULL`), never auto-seeded ones. |
 | **users** | Distinct users per feature. | Chat / mains-eval / PYQ-variation are **absent by design** — nothing is stored for them. |
 
 ### Monetization × engagement
 
 | Number | What it is | Watch out |
 |---|---|---|
-| **premium / free rows** | Users split on `premium_expires_at > now`. | ⚠️ **A different definition of "premium" than the Analytics screen.** Trial users land in `free` here (no expiry date), and a churned-but-not-yet-expired user lands in `premium`. Expect this count to differ from both Analytics cards. |
+| **premium / free rows** | The selected exam's people split on a **live entitlement in that exam** (`upsc-cse` when no exam, `examDefaulted: true`); `byExam[]` repeats it per active exam. | Trials land in `free` (no entitlement row). Someone who bought APPSC but studies UPSC is `free` in UPSC — that is what per-exam means. |
 | **activeUsers** | Of those, how many took ≥1 action in the window. | |
 | **avg actions / active user** | totalActions ÷ activeUsers. | Denominator is *active*, not all — so it never gets diluted by dormant accounts. |
 | **Paywall hits** (by route) | HTTP **402** responses per route, i.e. someone hit a paid wall. | Upgrade intent, not failures. From raw `api_usage` → **max ~30 days** regardless of the window you pick. |
@@ -154,9 +155,9 @@ Two lines per IST day: **engaged** (plane A, full history) and **active** (plane
 
 | Number | What it is | Watch out |
 |---|---|---|
-| **Cohort size** | Users who signed up inside the window. | |
-| **D1 / D7 / D30** | Of that cohort, how many were active **at any point ≥1 / ≥7 / ≥30 days after their own signup**. | ⚠️ **Cumulative, not "on day 7".** And someone who signed up 3 days ago *cannot* satisfy D7 — so a 30-day window always shows a depressed D7/D30. Compare cohorts of equal age, or widen the window. |
-| **Churn risk** | Users whose last genuine action was more than `inactiveDays` ago **but within the last 90 days**. | ⚠️ Users who **never** did anything are excluded entirely, and anyone silent >90 days drops off the list. This is "going quiet", not "already gone". |
+| **Cohort size** | Users who signed up inside the window (context only). | |
+| **D1 / D7 / D30** | Ring N is over the users **old enough** to have reached day N (signed up in [start − N, end − N], `dNCohort`); `dN` = of those, active **at any point ≥ N days after their own signup**; `dNPct = dN ÷ dNCohort`. | ⚠️ **Cumulative, not "on day 7".** Since audit U4 a young signup no longer depresses D7/D30 — it is simply not in that ring's cohort. |
+| **Churn risk** | Users whose last genuine action was more than `inactiveDays` ago **but within the last 90 days**, AND who have not opened the app (`sessions.lastAccessedAt`) within `inactiveDays` either. Rows carry `lastOpenedAt`. | ⚠️ Users who **never** did anything are excluded entirely, and anyone silent >90 days drops off the list. This is "going quiet", not "already gone". |
 
 ### Behaviour
 
@@ -183,7 +184,7 @@ Straight from the **Mux Data API**, not our database.
 
 | Column | What it is | Watch out |
 |---|---|---|
-| **Actions 30d** | Rows in the 6 domain tables (plane A) for that user in the last 30 days. | ⚠️ The current UI tooltip says "screen opens, taps & other tracked events" — **that is wrong.** We do not track screen opens or taps at all. It is only the 6 tables. Worth fixing in the portal. |
+| **Actions 30d** | Rows in the 7 domain tables (plane A) for that user over the **request window** (`windowDays`; the key keeps its old name). | We do not track screen opens or taps. Rows also carry `daysStudied`, `sessions`, `minutesInApp` (lane B6.2, the profile's session rule) and `isInternal`. |
 | **Last seen** | `max(sessions.lastAccessedAt)` — last time a session token was used. | Closer to "last opened the app" than Actions 30d. |
 | **Premium until** | `premium_expires_at`. | NULL for trial users and for never-paid users alike. |
 
@@ -210,10 +211,10 @@ exist and every number on the screen is a cross-exam total (§0.1).
 | Number | What it is | Watch out |
 |---|---|---|
 | **Paywall viewed / Upgrade tapped / Checkout opened / Checkout abandoned / Purchase failed** | **Distinct users** per IST day who emitted that `auth_events` type. Not event rows — a paywall re-renders. | ⚠️ **Client-emitted by app 2.0+ only**, through the public diagnostics ingest. A user on an older build is invisible, so **every step is a floor** and a rising funnel can be adoption rather than improvement. Rows with a NULL `user_id` are *unattributable* and excluded — not zero. |
-| **Orders paid** | `orders` at `PAID`, `is_test = false`, by the order's own IST creation day. | The only **server-truth** number on the panel. It is not joined to the events. |
+| **Orders paid** | `orders` at `PAID`, `is_test = false`, **first real payments only** — staff comps (MANUAL) go to `comps`, renewals to `renewals` — by the order's own IST creation day. | The only **server-truth** number on the panel. It is not joined to the events. |
 | **Conversion %** | `ordersPaid ÷ paywallViewed × 100`, one decimal. | ⚠️ **`null`, never `0`, on a day with no views** — "no denominator" and "converted nobody" are different facts, and the first usually means the day predates the emitting build. ⚠️ **It can exceed 100%, and that is information, not a bug**: someone bought without a recorded paywall view, so the number is measuring **emitter coverage**. Do not clamp it and do not "fix" it. |
 | **Totals** | Per-day distinct counts **summed**. | A user who viewed the paywall on three days counts **three times**. It is the only total consistent with the chart above it; a window-wide distinct count would not add up. |
-| **Per-exam conversion %** | Steps attributed by the user's **current** `active_exam_id`; `ordersPaid` by `orders.exam_id`. | ⚠️ A **retro-attributed denominator** with an **exactly-attributed numerator**. Read a per-exam conversion as directional only; the all-exams number (no `?exam=`) is the exact one. The service ships this sentence in `caveats` verbatim. |
+| **Per-exam conversion %** | Steps attributed by the user's **current** `active_exam_id`; `ordersPaid` by `orders.exam_id`. | ⚠️ A **retro-attributed denominator** with an **exactly-attributed numerator**. Read every funnel conversion as directional: there is **no all-exams funnel** — no `?exam=` returns the `upsc-cse` funnel (`examDefaulted: true`). The caveat string says the same (lane B7.5). |
 
 ---
 
@@ -223,7 +224,7 @@ Finds **broken questions**, not hard ones. `GET /sme/content/question-quality`. 
 
 | Number | What it is | Watch out |
 |---|---|---|
-| **Attempts** | Content pool: **distinct users** who answered (one upserted row per user per question). Simulation pool: answered rows in submitted attempts. | Blank answers are counted as `skipped` and excluded from attempts. |
+| **Attempts** | Content pool: **distinct users** who answered (one upserted row per user per question). Simulation pool: answered rows in submitted attempts. PYQ pool (`pool=pyq`, since 2026-11): first attempts from `pyq_attempts`. | Blank answers are counted as `skipped` and excluded from attempts. Each row also carries ONE `verdict` (`worse_than_chance` · `contradicts_key` · `suspicious` · `ok`). |
 | **Wrong** | Content pool: the user's **latest** stored `isCorrect`. Simulation pool: `selectedOption` compared against the question's **current** key. | Someone who missed it, retried and got it right counts as **correct** — so wrong-rate is a *floor*. If a key was fixed later, old simulation answers are re-scored under the new key. |
 | **Wrong rate %** | wrong ÷ attempts. | Raw, no confidence — do not rank on this. |
 | **Guessing rate / chance %** | `1 − 1/optionCount` — 75% for a 4-option MCQ. | The bar a well-formed question can't fall below. |
@@ -243,13 +244,14 @@ Answers "should we force-update?". `GET /sme/analytics/release-health`. Default 
 
 | Number | What it is | Watch out |
 |---|---|---|
-| **App version** | The `x-app-version` header on each request. | ⚠️ **`pre-1.7 (no x-app-version header)` is a real cohort, not missing data** — the header shipped with 1.7, so every older build lands there. Never delete or merge that row. Current store build is **2.0** (Android 27, iOS 2.0 build 3, released 2026-09-17), so expect rows up to 2.0; `AppConfig.minAppVersion` on production is **1.0.0**, i.e. no forced update is in effect. |
+| **App version** | The `x-app-version` header on each request. | ⚠️ **`pre-1.7 (no x-app-version header)` is a real cohort, not missing data** — the header shipped with 1.7, so every older build lands there. Never delete or merge that row. When written (2026-09-21) the store build was **2.0** and production `minAppVersion` **1.0.0**; 2.1 has since shipped and 2.2 is due 2026-11-03 — read the live config, not this doc. |
 | **Active users** | Distinct users who made a request on that build × platform. | A user on two builds in the window counts in **both** rows. |
 | **Requests** | Captured authenticated requests for that build. | Public/login routes are not captured — **a build that can't get past login is invisible here.** Its signal shows up in Client errors. |
 | **Error rate (excl. paywall)** | (4xx + 5xx − 402) ÷ (requests − 402). | **This is the number to judge a build on.** |
 | **Error rate (incl. paywall)** | 4xx + 5xx ÷ requests, 402 included. | 402 is the paywall doing its job — a monetisation signal, not a fault. Ignore this column when comparing builds. |
-| **Client errors** | `auth_events` rows of type `client_error` reported by the app itself. | Can create a row for a build that made zero successful requests. That's deliberate — a crash-only build is exactly what we're hunting. |
-| **Client errors / active user** | clientErrors ÷ activeUsers. | The crash-proxy. |
+| **Client errors** | `auth_events` rows of type `client_error` reported by the app itself, split in `clientErrorsByKind { authExpired, network, other }`. | **None of these is a crash — the app reports no crashes to us.** Most are expired sign-ins (`http_401`). Can create a row for a build that made zero successful requests. |
+| **Client errors / active user** | clientErrors ÷ activeUsers. | A client-error rate, not a crash rate; judge on `other`, not on `authExpired`. |
+| **Blocked if required** | `blockedIfRequire[]`: per candidate version, the distinct mobile users whose latest request came from an older build (`÷ meta.forceUpdate.mobileUsers`). | **The force-update number**: who would hit the wall if `minAppVersion` were raised to that version today. |
 | **Adoption share %** | This build's active users ÷ all active users on that platform. | ⚠️ **Can sum past 100%** across builds, because a user upgrading mid-window counts on both. |
 | **vs. previous build** | `better` / `worse` / `similar` / `insufficient_data` against the next-older build on the same platform. | Thresholds: **±1.0 error-rate points** or **±0.5 client errors per user**. A verdict needs **≥200 requests and ≥5 active users on both builds** — otherwise `insufficient_data`, which means "too quiet to judge", not "fine". |
 | **Not derivable** (headline) | Shown when there isn't a comparable pair. | |
@@ -270,7 +272,7 @@ Answers "should we force-update?". `GET /sme/analytics/release-health`. Default 
 | **Matured sent / Matured read rate** | Only rows **older than the maturation window (default 3 days)**. | A push sent 20 minutes ago hasn't had a fair chance. **All rates are quoted on the matured sample only** — this is why recent days look empty. |
 | **Pending** | Rows too young to judge. Excluded from every rate. | If Matured read rate says "maturing", everything in the window is still pending. |
 | **Wasted sends** | maturedSent − maturedRead. | Blast radius. The kill-list is ranked by this, not by rate — killing a bad type that goes to 5 people saves nothing. |
-| **Recipients** | Distinct users who got that type. | Built from the newest 20,000 rows only; the banner says so when the cap is hit. |
+| **Recipients** | Distinct users who got that type. | A full-window SQL aggregate since audit U2 — no row cap (`dailyRowCapHit` is always `false`). |
 | **Types** | Distinct `type` values in the window. | |
 | **Worst performers** | Types with ≥50 matured sends **and** ≤25% read rate. | Tune both thresholds in the toolbar. Empty ≠ healthy — check "Matured sent" first. |
 | **Time to read** | Always **"not derivable"**. | `read_at` exists but records the *bulk feed open*, not this notification's open. Any number here would be fabricated, so we return none. |
@@ -278,7 +280,9 @@ Answers "should we force-update?". `GET /sme/analytics/release-health`. Default 
 ### 5.1 There is now an honest alternative — but only for engine-sent notifications
 
 `GET /sme/notification-rules/:id/analytics` returns `sent` / `tapped` / `tapRate` from
-`notification_dispatch`. **`tapped` is set only when the user actually opened that
+`notification_dispatch`, and the notification-effectiveness body carries the same `tapped`
+per rule in `byRule[]` (with `meta.taps.measured`; `tapped` is `null` until an app build
+reports taps — none does yet). **`tapped` is set only when the user actually opened that
 notification** — the thing `isRead` was never able to tell you.
 
 Three caveats, all load-bearing:
@@ -311,7 +315,7 @@ construction, and the comparison invites exactly the wrong conclusion.
 | **2. Phone verified** | `phone_verified = true` right now. |
 | **3. Onboarding completed** | `user_profiles.onboarding_completed = true` right now. |
 | **4. Psychometric resolved** | Completed **OR** explicitly skipped **OR** a result row exists. It's "past the gate", not "took the test" — the `completed / skipped only / with result row` mini-tags break it down. |
-| **5. First genuine action** | First row in any of the 6 domain tables at or after signup. |
+| **5. First genuine action** | First row in any of the 7 domain tables (incl. `pyq_attempts`, audit U9) at or after signup. |
 
 | Number | What it is | Watch out |
 |---|---|---|
@@ -320,7 +324,7 @@ construction, and the comparison invites exactly the wrong conclusion.
 | **Dropped / drop-off %** | previous.reached − reached. | ⚠️ **Can be negative.** Some users satisfy a stage without the one before it (e.g. finished onboarding without a verified phone). We report it raw rather than clamping, and `reachedWithoutPrevious` tells you how many. |
 | **Median / p90 time to reach** | Nearest-rank percentile, so it's always a duration someone really experienced. | **Stage 3 has no timing at all** — there is no `onboarding_completed_at` column, and inventing one from `updated_at` would be a lie. Stage 4 times only the *completed* path; a skip has no timestamp. |
 | **Sample coverage %** | Share of people at that stage who carry a usable timestamp. | Low coverage = the median describes a minority. |
-| **First action `bySource`** | Which of the 6 tables produced the first action. | ⚠️ `psychometric_test_results` is in that union — so a user whose only action was the psychometric test satisfies **stage 5 with the same row that satisfied stage 4**. This breakdown is how you see how many. |
+| **First action `bySource`** | Which of the 7 tables produced the first action. | ⚠️ `psychometric_test_results` is in that union — so a user whose only action was the psychometric test satisfies **stage 5 with the same row that satisfied stage 4**. This breakdown is how you see how many. |
 | **Auth events** (login failed / otp send failed / otp verify failed) | App-wide pre-auth failures for that IST day, from `auth_events`. | ⚠️ **Capture began 2026-07-23** — days before that show `not rec.`, never 0. And coverage is **split**: `otp_send_failed` is emitted server-side and is **real**; `login_attempt / login_success / login_failed / otp_verify_failed` are **client-emitted by app 2.0 (released 2026-09-17) and by no older build**, so they are a **floor** that grows with 2.0 adoption. A low number there means "partly recorded", **never** "no failures". |
 | **Login success rate** | login_success ÷ login_attempt for the covered days. | Both terms come only from 2.0 devices, so the ratio describes the 2.0 cohort, not the install base (see above). |
 | **Worst-day correlation** | The covered day with the worst phone-verification rate, with that day's OTP failures beside it, plus the median OTP-verify failures for comparison. | Needs a day with **≥5 signups**. Its whole purpose: put an OTP spike next to the verification drop it caused. |
@@ -332,8 +336,8 @@ construction, and the comparison invites exactly the wrong conclusion.
 | Screen | Number | What it is |
 |---|---|---|
 | **App Users** | `premiumState` badge | Same 5-bucket funnel label as the Analytics chart. |
-| | `trialDaysLeft` | Days to the **effective** trial end (`trialEndsAt` if an SME extended it, otherwise signup + 14 days). |
-| | Platform filter | Filters on **active device tokens**, not on sign-in provider. **[portal-side]** The portal's local filter compares against `provider`/`subscriptionSource` instead — different meaning, different results. |
+| | `trialDaysLeft` | Days to the **effective** trial end (`trialEndsAt` if an SME extended it, otherwise signup + the trial length of the person's exam — `getPersonTrialDays`: `upsc-cse` 3 days for signups since 2026-09-25, 14 before; `appsc-group-1` 0). |
+| | Platform / Push device filter | Filters on **active device tokens**, not on sign-in provider. The portal sends it upstream as `platform` (since v2.48.0; `none` = no active token, B6.4). |
 | **Transactions** | Amounts | Always **₹**. We divide the stored paise by 100 before sending. |
 | | `premiumGrantedAt` on an order | When premium was actually granted. NULL on every order older than 2026-06-16. |
 | **Feedback** | Chat thumbs summary | Only rows the app explicitly submitted; the AI conversation itself is not stored. |
@@ -343,15 +347,15 @@ construction, and the comparison invites exactly the wrong conclusion.
 
 ## 8. Known-wrong / misleading numbers (the short list)
 
-**Status re-verified live against portal build v2.32.0 on 2026-07-29.** That release closed most of the labelling items the same morning. Verify against the live portal, never against a downloaded copy of the portal repo — the snapshot in `~/Downloads` carries no git history and goes stale within days.
+**Status re-verified live against portal build v2.32.0 on 2026-07-29; items 1, 2 and 4 re-checked against portal v2.49.0 on 2026-11-03 (docs ledger) and are now closed.** That 2026-07-29 release closed most of the labelling items the same morning. Verify against the live portal, never against a downloaded copy of the portal repo — the snapshot in `~/Downloads` carries no git history and goes stale within days.
 
 ### Still open
 
-1. **Analytics → Apple "Events recorded" is inflated with Razorpay events.** The portal requests `/sme/webhooks?source=APPLE`, but its HTTP client replaces the whole query string with `page`/`limit`, dropping the filter. **Proven:** the webhook ledger holds 30 events in total, its first row is `eventType: order.paid, source: razorpay`, and the Apple panel reports exactly 30. **[portal-side]** — pass `source` as a param rather than baking it into the path. The five lifecycle counters below it match on an `apple.` prefix and are unaffected.
+1. ✅ **CLOSED (portal: `source=APPLE` sent as a param + `apple.*` filter).** ~~**Analytics → Apple "Events recorded" is inflated with Razorpay events.**~~ The portal requests `/sme/webhooks?source=APPLE`, but its HTTP client replaces the whole query string with `page`/`limit`, dropping the filter. **Proven:** the webhook ledger holds 30 events in total, its first row is `eventType: order.paid, source: razorpay`, and the Apple panel reports exactly 30. **[portal-side]** — pass `source` as a param rather than baking it into the path. The five lifecycle counters below it match on an `apple.` prefix and are unaffected.
    ⚠️ Do not "prove" this by arithmetic: 3 + 11 + 3 = 17 against a total of 30 does **not** demonstrate a leak, because other legitimate `apple.*` types would explain the same gap. The proof is a razorpay row inside the ledger being counted.
-2. **Analytics is capped at 6,000 rows per list.** Total Users, revenue totals, signups-by-month and every bar on that screen quietly stop growing past that; failed pages are silently dropped too. Not biting yet — 3,989 users at ~68/day — but it starts truncating around **late August 2026**. **[portal-side]** — raise the page cap or move the aggregation to our backend.
+2. ✅ **CLOSED (portal: 400-page ceiling + an "incomplete" banner from `coverage`; the money cards now come from our `summary.money`).** ~~**Analytics is capped at 6,000 rows per list.**~~ Total Users, revenue totals, signups-by-month and every bar on that screen quietly stop growing past that; failed pages are silently dropped too. Not biting yet — 3,989 users at ~68/day — but it starts truncating around **late August 2026**. **[portal-side]** — raise the page cap or move the aggregation to our backend.
 3. **Plane-B cards still over-promise their window.** Release Health is now capped to 7/14/30 and the heatmap carries a note, but **paywall hits still offers a 7/30/60/90 selector over ~30 days of data**.
-4. **The Onboarding Funnel's stage-5 breakdown renders `[object Object]` and `NaN%`** — the portal is stringifying an array of objects. Still present on v2.32.0. The 1,079 headline above it is sound.
+4. ✅ **CLOSED (portal `InsightOnboardingFunnel.tsx`).** ~~**The Onboarding Funnel's stage-5 breakdown renders `[object Object]` and `NaN%`**~~ — the portal was stringifying an array of objects. The 1,079 headline above it is sound.
 
 ### Misleading by construction (not defects — read them before quoting)
 
@@ -360,7 +364,7 @@ as a bug, and each one has a correct sentence that must travel with it.
 
 | # | The number | Why it misleads | What to say instead |
 |---|---|---|---|
-| A | **Every analytics number with no `?exam=`** | It is a **cross-exam total**. The app has sold APPSC since 2026-09-08 and shipped multi-exam on 2026-08-25, so an MAU figure quoted off this screen is MAU across all exams — and the un-filtered "premium" count uses the **person-level mirror**, which flips on any purchase. | Say "…across all exams" out loud. If someone wants UPSC specifically, pass `exam=upsc-cse` — and then read row B. |
+| A | **Every analytics number with no `?exam=`** | It is a **cross-exam total**. The app has sold APPSC since 2026-09-08 and shipped multi-exam on 2026-08-25, so an MAU figure quoted off this screen is MAU across all exams. ⚠️ The "premium" / money figures are the exception: with no `?exam=` they answer for **`upsc-cse`** (`examDefaulted: true`), never an account-wide mirror. | Say "…across all exams" out loud. If someone wants UPSC specifically, pass `exam=upsc-cse` — and then read row B. |
 | B | **Per-exam usage history before 2026-09-21** | It does not exist. `api_usage.exam_id` was added that day; earlier rows are NULL and are **excluded**, UPSC included. A per-exam DAU chart therefore *starts* on deploy day. | "Per-exam request data starts 21 Sep 2026 — `examCoverage.since` says so on the response." **Never** compare a per-exam number with a pre-deploy all-exam number; the older one contains every exam. |
 | C | **Any per-exam number sourced from `active_exam_id`** (signups, retention, churn, features, platforms, notifications, the funnel cohort) | **Retro-attribution.** The user is attributed to the exam they have picked *today*, applied backwards over their whole history. There is no switcher history and the schema has nowhere to keep one. | "Attributed to each user's current exam." Directionally useful, exactly wrong for anyone who switched. Worst on a **new** exam, where switchers are a large share. |
 | D | **`clientErrors` / `clientErrorsPerActiveUser` on an exam-filtered release-health** | `auth_events` has no exam column, so that column stays **app-wide** while `activeUsers` beside it is narrowed. The ratio is an **overstatement** by roughly the inverse of the exam's share of traffic. | `meta.clientErrorsExamScoped: false` is on the response; surface it. Judge exam-filtered builds on `errorRateExcludingPaywallPct`, and compare crash rates only with the exam filter **off**. |
@@ -368,8 +372,8 @@ as a bug, and each one has a correct sentence that must travel with it.
 ### Closed
 
 5. ~~**"Paid orders need reconcile" is historically inflated**~~ — `premiumGrantedAt` only exists from 2026-06-16. Addressed by labelling: the Orders tab now explains that an order predating the field can look unreconciled even though premium was granted.
-6. ~~**Three different "premium" numbers across two screens**~~ — the Engagement screen now states outright that its tier means "premium expiry > now, so active trials count as free — a different rule from Analytics' two premium figures".
+6. ~~**Three different "premium" numbers across two screens**~~ — superseded 2026-11: the Engagement tier is a live entitlement in one exam ("Paid or comped on {exam}"), and Analytics' money cards come from `summary.money` per exam.
 7. ~~**"Actions 30d" claims screen opens and taps**~~ — replaced with the actual list of counted features, plus an explicit "screen opens and taps are not tracked".
-8. ~~**D7/D30 retention looks broken on a short window**~~ — the screen now says so itself: "Anyone who signed up fewer than N days ago cannot qualify yet but still counts in the cohort … Not a broken metric."
+8. ~~**D7/D30 retention looks broken on a short window**~~ — fixed at the source (audit U4): each ring's cohort is only users old enough (`d1Cohort`/`d7Cohort`/`d30Cohort`). The old screen copy ("…still counts in the cohort") is no longer true and should go.
 9. ~~**Auth-event zeros in the funnel**~~ — capture is live and reporting (140 attempts / 117 successes on 29 Jul); pre-capture days render as "not rec." rather than 0.
 10. ~~**Two Razorpay payments missing from the ledger**~~ — ours, not the portal's. Fixed in `payments.service.ts` and backfilled 2026-08-06. See the note under §1.

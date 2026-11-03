@@ -1193,6 +1193,10 @@ only `uiLanguage`. Any other client should do the same.
   }
 }
 ```
+**Filter by it:** `GET /sme/users?language=<code>|none` (lane B3.1) — `<code>` = users whose
+`uiLanguage` is that code (format-checked only — a malformed value is a 400, a well-formed
+code nobody picked returns 0 rows), `none` = never chose one (`null`). See WHAT_CHANGED_2026-11.md §B3.1.
+
 Read-only here: the portal does not set a user's language. A stored language can still stop
 being servable later — an SME disables it — and then that user simply sees English: nothing
 cascades, the stored value stays, and it applies again if the language is re-enabled.

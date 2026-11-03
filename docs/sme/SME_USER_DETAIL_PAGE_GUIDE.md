@@ -155,10 +155,11 @@ Amounts are already in major units. **Do not divide by 100.**
   to draw. When `available: false`, show the `unavailableReason` in place of the numbers —
   **`quota.examId` is still present on that path** and should still be shown, because "which
   exam did we fail to read" is part of the diagnosis.
-- **Streak** — `currentStreak` / `maxStreak` / `lastActiveDate`. When `available: false`,
-  render **"Streak unavailable"** plus the reason. **Never a zero.** "0-day streak" and "we
-  couldn't read the graph DB" are different sentences to an operator, and only one of them is
-  the user's fault.
+- **Streak** — `currentStreak` / `maxStreak` / `lastActiveDate`, read from Postgres and always
+  `available: true` (no Neo4j since audit 2026-11 U11). `currentStreak` is LIVE (0 once the
+  last credited IST day is older than yesterday); `storedStreak` is what the app still shows.
+  When `live` is false and `storedStreak > 0`, say both: "No active streak · best 5 · last
+  credited 17 Sep — the app still shows 2".
 
 **Bottom strip — reachability**
 - `lastSeen` as five relative timestamps with their absolute values on hover:
@@ -313,7 +314,8 @@ invalidates the cursor position, so changing a filter must reset to page 1. `nex
 - *Empty (no filters):* distinguish the two real causes —
   (a) **nothing happened** — plausible for a dormant account; and
   (b) **nothing was captured** — the request trail starts at the interceptor's deploy date and
-  is purged at 30 days, and the mobile-emitted events do not exist in any shipped build yet.
+  is purged at 30 days, and the mobile-emitted events exist only from app 2.0 (2026-09-17) on
+  — a device on an older build emits none.
   If the window predates capture, say *"Request tracking started on <date>"* rather than
   implying the user was idle.
 - *Error:* inline retry on the panel; keep already-loaded pages on screen.
@@ -407,7 +409,7 @@ and "empty" usually means *this user has not updated*.
 | `api_usage` older than ~30 days | Nightly purge; and nothing at all before the interceptor's deploy date | "Request tracking started on <date>" |
 | `auth_events` older than 90 days | Nightly purge | State the retention rather than showing a blank tail |
 | Quota for any day but today | Redis TTL at midnight IST — genuinely deleted | "Today only — quota history is not retained" |
-| Streak | Neo4j has known stale/duplicate user nodes | The `unavailableReason`, never a zero |
+| Streak | Not a gap any more — Postgres-backed, always available | Show `currentStreak` (live) and, when it differs, `storedStreak` (what the app shows) |
 
 Before shipping the page, run `SELECT min(created_at) FROM api_usage;` and use the real date in
 that copy. Do **not** hardcode a guess, and do not promise a window the data doesn't have.

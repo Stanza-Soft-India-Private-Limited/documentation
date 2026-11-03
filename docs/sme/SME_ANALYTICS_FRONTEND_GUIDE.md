@@ -30,8 +30,9 @@ can design the right visualization rather than guessing.
 
 - **Base URL:** `https://app.stanzasoft.ai/api/v1`
 - **Auth:** header `x-api-key: <API_KEY_SECRET>` on **every** request. Missing/invalid → `401 { "message": "Invalid or missing API key" }`.
-- **Time window:** every endpoint accepts `?days=30` (default `30`, max `120`) and optional `?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD` (ISO; overrides `days`).
-- **Exam:** every endpoint accepts an optional `?exam=<slug>`. Omit it → the response is **byte-identical** to the old one. Supply an unknown slug → **`400`**. Supply a known one → some routes **change shape**. See "The second concept" below; the full per-route contract is [SME_USAGE_ANALYTICS.md §0b](./SME_USAGE_ANALYTICS.md).
+- **Time window:** every endpoint accepts `?days=30` (default `30`, max `120`) and optional `?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD` (overrides `days`). A bare date is an **IST day** — start inclusive, end = the whole day (lane B6.3); a full ISO instant is taken literally.
+- **Internal accounts:** every endpoint **excludes** staff / store-review / sandbox-tester accounts by default (lane B2.7); `?includeInternal=1` counts them, and bodies echo `includeInternal`.
+- **Exam:** every endpoint accepts an optional `?exam=<slug>`. Omitting it is **no longer byte-identical** to the pre-November body: bodies gained keys (summary `money` + `includeInternal`; users `windowDays`/`premiumExamId`/`examDefaulted`/`includeInternal` and per-row `isInternal`/`daysStudied`/`sessions`/`minutesInApp`; premium-engagement `examId`/`examDefaulted`/`windowDays`/`byExam`; retention `d1Cohort`…/`definition`/`windowDays`; churn `lastOpenedAt`/`isInternal`/`inactiveDays`), and several routes answer for **`upsc-cse` with `examDefaulted: true`** (below). Supply an unknown slug → **`400`**. Supply a known one → some routes **change shape**. See "The second concept" below; the full per-route contract is [SME_USAGE_ANALYTICS.md §0b](./SME_USAGE_ANALYTICS.md).
 - **Timezone:** all day buckets are **IST**. A "day" is an IST calendar date.
 - **Counts** are integers; **rates** (`*Rate`, `*Pct`) are percentages (0–100); `stickiness` is a 0–1 ratio.
 - **Money/PII:** none here. This surface is counts and timestamps only.
@@ -51,8 +52,11 @@ different exams is worse than no filter at all.
   per exam from **`GET /sme/exams`**. Do not hardcode the list; exams are added from the SME
   portal and a hardcoded list goes stale silently. Label with the exam's display name, send its
   slug.
-* **Default to `All exams`** and make that state visually obvious. It is the *exact* number;
-  every per-exam view is an approximation of one kind or another (below).
+* **"All exams" is not always all exams.** With no `exam`, premium-engagement, the users
+  list's `isPremium`, `summary.money` and the purchase funnel answer for **`upsc-cse`** and say
+  so with `examDefaulted: true` (there is no account-wide "premium", owner ruling 2026-11-03);
+  label the selector "UPSC (default)" in that state. The person-scoped counts (DAU, features,
+  signups, retention, churn) do cover everyone when no exam is sent.
 * Put the selection in the URL so a link to "APPSC, last 14 days" is shareable.
 * An unknown slug is a **400**, not an empty chart — that is deliberate, so the selector must
   never be able to emit a slug the API does not know. If a 400 does come back, show "that exam
@@ -144,9 +148,12 @@ The top-of-page headline numbers. One call powers the stat row.
   "engagedMau30d": 540,
   "activeDau24h": 96,
   "activeMau30d": 870,
-  "stickiness": 0.061
+  "stickiness": 0.061,
+  "includeInternal": false,
+  "money": { "window": "all-time", "exam": "upsc-cse", "examDefaulted": true, "revenuePaise": 590000, "…": "…" }
 }
 ```
+(`money` — per-exam, all-time money: see WHAT_CHANGED_2026-11.md §B1.3 for the full block.)
 | Field | Meaning |
 |---|---|
 | `engagedDau24h` / `engagedWau7d` / `engagedMau30d` | distinct users who *acted* in the last 1 / 7 / 30 days |
@@ -188,7 +195,7 @@ What users actually do.
   { "feature": "ai_revision",   "users": 1,   "actions": 1 }
 ]
 ```
-`feature` is a stable key (`simulation, mcq, doc_reading, psychometric, ai_flashcard, ai_mnemonic, ai_revision, planner`); `users` = distinct users, `actions` = total events.
+`feature` is a stable key (`simulation, mcq, pyq, doc_reading, psychometric, ai_flashcard, ai_mnemonic, ai_revision, planner` — `pyq` = PYQ practice from `pyq_attempts`, since audit U6); `users` = distinct users, `actions` = total events.
 → **Viz:** horizontal bars sorted by `actions`, with `users` as a secondary encoding (label or paired bar). **Note for copy:** map keys to human names (`mcq` → "Practice questions", `ai_mnemonic` → "AI mnemonics"). Chat / mains-evaluation / pyq-variation are **intentionally absent** (they bypass our backend) — if you show a feature legend, don't imply they're zero; omit them.
 
 #### `GET /sme/analytics/users?days=30&page=1&limit=20&search=&sort=lastSeen`
@@ -204,10 +211,15 @@ The drill-down roster. Paginated envelope.
       "premiumExpiresAt": "2027-06-29T10:15:00.000Z",
       "lastSeen": "2026-06-30T09:42:11.000Z",
       "actions30d": 84,
-      "isPremium": true
+      "isInternal": false,
+      "isPremium": true,
+      "daysStudied": 6,
+      "sessions": 9,
+      "minutesInApp": 74
     }
   ],
-  "total": 2098, "page": 1, "limit": 20, "hasMore": true
+  "total": 2098, "page": 1, "limit": 20, "hasMore": true,
+  "windowDays": 30, "premiumExamId": "upsc-cse", "examDefaulted": true, "includeInternal": false
 }
 ```
 `sort ∈ lastSeen | actions`; `search` matches email/name. `isPremium` is pre-computed. `lastSeen`/`premiumExpiresAt` may be `null`.
@@ -223,7 +235,7 @@ Newest first. → **Viz:** bars under/beside the DAU line for context.
 { "cohortSize": 1590, "d1": 49, "d7": 120, "d30": 240,
   "d1Pct": 3.1, "d7Pct": 7.5, "d30Pct": 15.1 }
 ```
-Of users who **signed up in the window**, how many came back ≥1 / 7 / 30 days later. → **Viz:** a small D1→D7→D30 retention curve or three labeled rings. Always show `cohortSize` so the percentages are trustworthy.
+Ring N is over the users **old enough** to have reached day N — those who signed up in [start − N days, end − N days] (`dNCohort`) — and `dNPct = dN ÷ dNCohort`: how many came back ≥ N days after signup. `cohortSize` (signups inside the window) is context only (audit U4). → **Viz:** a small D1→D7→D30 retention curve or three labeled rings. Always show `cohortSize` so the percentages are trustworthy.
 
 #### `GET /sme/analytics/churn-risk?inactiveDays=14&page=1&limit=20`
 ```json
@@ -235,7 +247,7 @@ Of users who **signed up in the window**, how many came back ≥1 / 7 / 30 days 
   "total": 134, "page": 1, "limit": 20, "hasMore": true
 }
 ```
-Users active within 90 days but **silent ≥`inactiveDays`** — a win-back list. → **Viz:** action-oriented list ("Last seen 20 days ago"), sortable, exportable. Empty state = a *good* outcome; write it as such ("No one's slipping right now.").
+Users who studied within 90 days but have **neither studied nor opened the app** (`sessions.lastAccessedAt`) for ≥`inactiveDays` — a win-back list. Rows carry `lastOpenedAt` beside `lastActivity` (last studied) and `isInternal`. → **Viz:** action-oriented list ("Last seen 20 days ago"), sortable, exportable. Empty state = a *good* outcome; write it as such ("No one's slipping right now.").
 
 ### ③ Monetization × engagement — "what converts?"
 
@@ -249,8 +261,8 @@ Users active within 90 days but **silent ≥`inactiveDays`** — a win-back list
 Compare how hard premium vs free users use the app. → **Viz:** a two-column comparison (avg actions/active user is the punchline). Premium cohort is tiny today (8) — design so a small-N tier still reads clearly and doesn't look broken.
 
 ⚠️ **With `?exam=`, "premium" silently means something else.** Same shape, different definition:
-without the param, `tier` splits on the **person-level** `premiumExpiresAt > now` mirror; with
-it, on a **live entitlement in that exam**. So an APPSC subscriber who has switched their active
+`tier` is ALWAYS a **live entitlement in one exam** — `exam` when sent, otherwise **`upsc-cse`**
+(`examDefaulted: true`); the `premiumExpiresAt` mirror is never the test. So an APPSC subscriber who has switched their active
 exam to UPSC shows up under UPSC as **`free`** — correct, because entitlements are per-exam, but
 guaranteed to be reported as a bug unless the UI says so. Label the tier axis differently in the
 two states ("Premium (any purchase)" vs "Entitled to &lt;exam&gt;") rather than swapping the
@@ -311,7 +323,9 @@ Where the money stops. The only panel that puts the **client's** view of a purch
 > returned, newest first, zero-filled, and **`conversionPct: null` everywhere including
 > `totals`**. Build the panel against this body first: if it renders "0% conversion"
 > anywhere above, it is wrong before a single real event arrives. `caveats` came back
-> with **7** entries (6 base + 1 for `exam`).
+> with 7 entries at capture time; today it is **8 with `exam`, 9 without** (6 base + the
+> exam-attribution sentence, ALWAYS + the default-exam sentence when no `exam` + the
+> internal-accounts sentence, ALWAYS).
 
 **A constructed illustration** of the two awkward rows the rendering rules below exist
 for — *not* a capture (staging has no paywall traffic), but both are reachable:
@@ -326,7 +340,7 @@ for — *not* a capture (staging has no paywall traffic), but both are reachable
 | Field | Meaning |
 |---|---|
 | the five step counts | **distinct users** who emitted that event on that IST day — not event rows. A paywall re-renders; counting rows would make the metric a function of how chatty the build is. |
-| `ordersPaid` | server truth: `orders` at `PAID`, test orders excluded, by the order's own IST day. |
+| `ordersPaid` | server truth from `orders`: **FIRST real payments only** — `PAID`, not sandbox, not a staff comp (MANUAL → `comps`), not a renewal (→ `renewals`), internal accounts excluded by default; by the order's own IST day. |
 | `conversionPct` | `ordersPaid ÷ paywallViewed × 100`, one decimal. **`null` on a zero denominator, and it can exceed 100.** |
 | `totals` | per-day distinct counts **summed** — a user active on three days counts three times. Say so in a tooltip; it is the only total consistent with the chart. |
 
@@ -344,8 +358,10 @@ and **`conversionPct` as a line on a secondary axis**. Two rendering rules are n
 ⚠️ Every step is a **floor**: the five events are client-emitted by app 2.0+ only, so a rising
 conversion can mean *adoption*, not a better paywall. And with `?exam=` the steps are attributed
 to the user's **current** exam while `ordersPaid` uses the order's real exam — a retro-attributed
-denominator with an exact numerator. Render the per-exam funnel with a "directional" badge and
-keep the all-exams view as the exact one. The `caveats[]` array says all of this in prose:
+denominator with an exact numerator. Render every funnel with a "directional" badge: there
+is **no all-exams funnel** — omitting `exam` returns `upsc-cse` (`examDefaulted: true`), other
+exams' paid figures arrive only as `byExam[]` / `allExams`. (The attribution caveat says the
+same since lane B7.5.) The `caveats[]` array says all of this in prose:
 surface it on the panel, do not drop it.
 
 ### ④ Behavioural — "when & how they use it?"
@@ -411,7 +427,7 @@ secondary, put it in a tooltip or detail row — but it must be present. Tick ea
 - [ ] **summary** → `engagedDau24h` · `engagedWau7d` · `engagedMau30d` · `activeDau24h` · `activeMau30d` · `stickiness` · `examCoverage` (exam-scoped only)
 - [ ] **dau[]** → `day` · `engagedDau` · `activeDau` (incl. the `null` region shown honestly) · `examCoverage` (exam-scoped only)
 - [ ] **features[]** → `feature` (humanized) · `users` · `actions`
-- [ ] **users** → `data[]`: `id` · `email` · `name` · `phoneNumber` · `premiumExpiresAt` · `lastSeen` · `actions30d` · `isPremium`; envelope: `total` · `page` · `limit` · `hasMore` (pagination control)
+- [ ] **users** → `data[]`: `id` · `email` · `name` · `phoneNumber` · `premiumExpiresAt` · `lastSeen` · `actions30d` (counts over `windowDays`, key kept) · `isPremium` (live entitlement in `premiumExamId`) · `isInternal` · `daysStudied` · `sessions` · `minutesInApp`; envelope: `total` · `page` · `limit` · `hasMore` · `windowDays` · `premiumExamId` · `examDefaulted` · `includeInternal`
 - [ ] **signups[]** → `day` · `newUsers`
 - [ ] **retention** → `cohortSize` · `d1` · `d7` · `d30` · `d1Pct` · `d7Pct` · `d30Pct`
 - [ ] **churn-risk** → `data[]`: `id` · `email` · `name` · `phoneNumber` · `lastActivity`; envelope: `total` · `page` · `limit` · `hasMore`

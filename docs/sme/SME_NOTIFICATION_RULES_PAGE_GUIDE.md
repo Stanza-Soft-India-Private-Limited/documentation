@@ -88,9 +88,11 @@ in `vars` on the trigger. Show them as insertable chips next to the title/body i
 produces *"Your Premium ends in  days"* — silently, with no error anywhere. The chips are the
 defence; a free-text box with no affordance will produce typos.
 
-The `/triggers` response now also carries `sampleVars` — the values a test send renders with.
-Use them to power a live preview of the copy as the operator types; it is the same data the
-backend will use, so the preview cannot drift from the test.
+The `/triggers` response does **not** carry sample values (each trigger has `key, kind,
+category, description, configSchema, defaultConfig, defaultCopy, defaultDeepLink,
+defaultSendAtIst, vars, transactional, available, unavailableReason`). For a live preview,
+render with placeholder values of your own and label it a preview; `POST /:id/test` returns
+the real `rendered` copy for a named user.
 
 Enforce title ≤ 120 and body ≤ 500 with live counters. The API truncates rather than rejecting,
 so an over-long body is lost quietly at send time.
@@ -200,10 +202,10 @@ different things and `isRead` is much larger:
 `tapRate` is the honest number for "is this rule worth sending". `isRead` overstates
 engagement badly. If both appear on one screen, label them or someone will compare them.
 
-⚠️ **`tapped` is reported by the app, and only by app 2.0 and later.** The server side is live
-(`POST /notification-preferences/tapped` stamps `notification_dispatch.tapped_at`); app **2.0**
-went to both stores on **2026-09-17** and is the first build expected to call it — the backend
-cannot prove which client versions do, so confirm against the data before trusting a rate.
+⚠️ **`tapped` is reported by the app — and no app build calls it yet.** The server side is
+live (`POST /notifications/tapped` stamps `notification_dispatch.tapped_at`), but no shipped
+client sends it (AUDIT_2026-11 U3; no call in the local `upsc_app` checkout `7645b63`,
+2026-10-31), so `tapped` is structurally 0. Show "opens not measured", never a 0 % rate.
 A tap rate therefore describes the **2.0-adopted share** of a rule's recipients, and it climbs
 as people update. Do not present a low tap rate as a verdict while `sent` still includes older
 builds — show the covered share, or the first person to look will kill a rule that is working.
@@ -218,8 +220,9 @@ builds — show the covered share, or the first person to look will kill a rule 
 - **Shadow mode** — forces even live rules to shadow. Freezes all sending without touching
   individual rules.
 - **Quiet hours** — two time inputs, IST. Wraps midnight (22:00 → 08:00 is normal).
-- **Max per user per day** — **clamped 0–5 server-side**; the API 400s above 5. Enforce the
-  range in the input so the operator never sees a rejection for a value the UI offered.
+- **Max per user per day** — 0–5: a `PATCH` outside that range is a **400** (DTO); only a bad
+  value already stored is clamped on read. Enforce the range in the input so the operator
+  never sees a rejection for a value the UI offered.
 
 Say on the page that transactional notifications (payment succeeded, subscription ended) bypass
 quiet hours, the cap and the user's opt-out. Otherwise the first support question will be why a

@@ -18,8 +18,9 @@ create** and every write recorded in the audit trail.
 **Exam catalogue:** [SME_EXAMS_API.md](./SME_EXAMS_API.md) — where slugs come from and how to check a load landed.
 
 > **There is no response envelope.** `ResponseInterceptor` exists in the codebase and is
-> registered nowhere, so success bodies are RAW — exactly the shapes below. Errors are the
-> Nest default `{ statusCode, message, error }`. Branch on the HTTP status code.
+> registered nowhere, so success bodies are RAW — exactly the shapes below. Errors come from
+> the global exception filter: `{ success: false, message, error, statusCode, timestamp,
+> path, method }` (`src/common/filters/exception.filter.ts`). Branch on the HTTP status code.
 
 ---
 
@@ -38,8 +39,10 @@ UPSC learner sees questions about Andhra Pradesh, and the only way to find out i
 `/sme/content/*` closes that hole at the door: no `examIds`, no write. It is **the same
 three services** behind the same writes — `CmsPyqService`, `CmsMainsService`,
 `CmsSimulationService` — so normalisation, the `isOptional` derivation and the merge-on-PATCH
-rule cannot drift between the two surfaces. The only things added here are the
-required-`examIds` gate and the audit row.
+rule cannot drift between the two surfaces. What this surface adds: the required-`examIds`
+gate, the audit row, a STRICT `language` check (unknown code → 400; `/cms` is lenient),
+per-row validation on the bulk routes (lane B4.6, §3.2 and §4), and soft, attributed deletes +
+GET by id (`SmeContentParityController`, lane B4.1).
 
 **Use `/sme/content/*` for every new integration.** Existing import scripts can stay on
 `/cms/*`; §0 of [CMS_ADMIN_API.md](./CMS_ADMIN_API.md) is the route-by-route migration map.
@@ -190,18 +193,17 @@ action='CONTENT_INGEST' ORDER BY created_at DESC LIMIT 1`):
 }
 ```
 
-A bulk route writes the same `after` **without** the `id` key:
+A bulk route writes the same `after` **without** the `id` key, plus the languages written
+and the number of rows refused (since B4.6):
 
 ```jsonc
-{ "route": "POST /sme/content/pyq/bulk", "count": 100, "examIds": ["appsc-group-1"] }
+{ "route": "POST /sme/content/pyq/bulk", "count": 100, "examIds": ["appsc-group-1"], "languages": ["en"], "rejected": 0 }
 ```
 
-> ℹ️ **There is no API to read this back.** `sme_audit_log` is exposed only through the
-> per-user timeline ([SME_ACTIVITY_TRAIL_API.md](./SME_ACTIVITY_TRAIL_API.md)), and
-> `CONTENT_INGEST` rows carry `targetUserId: null` — so they belong to no user's timeline
-> and are invisible to every `/sme/*` read. Capturing the row above required a direct
-> database query. **If the portal needs a content-ingest history screen, that endpoint
-> does not exist yet.**
+> ℹ️ **Read it back with `GET /sme/content/edits`** (+ `GET /sme/content/edits/:id`, lane
+> B4.5): the content edit log lists `CONTENT_INGEST` rows (no actor — the x-api-key names
+> no person) beside the attributed `CONTENT_DELETE` rows. `CONTENT_INGEST` rows still carry
+> `targetUserId: null`, so they never appear on a user's timeline.
 
 One verb covers create, bulk and update across all three banks rather than nine — the thing
 worth reconstructing afterwards is *what landed in which exam*, and `route` + `count` +
@@ -753,11 +755,54 @@ semantics. **`404`** if the simulation does not exist.
 ### 3.7 `GET /sme/content/simulations`
 
 Returns **every** simulation including inactive ones, ordered `sortOrder asc, createdAt asc`.
-Not paginated — it is a plain array.
+Not paginated — it is a plain array. Since lane B7 (2026-11-03, branch `lane/b7`, **not yet
+deployed**) every row also carries **`attempts: { started, submitted }`**.
 
 | Param | Notes |
 |---|---|
 | `exam` | Exam slug. Matches that exam **or** `*`. Omit for every exam. Unknown slug = **400**. |
+| `language` | *(B7.2)* Content-language code (`en`, `hi`, …). **Wins over the `X-Lang` header** (the portal's proxies cannot forward headers) — same precedence as `/sme/content/{pyq,mains}`. Omit both for every language. Unknown code = **400**, before anything is read. |
+| `startDate` / `endDate` | *(B7.1)* Window for `attempts`, on the attempt's `startedAt`. `YYYY-MM-DD` = an **IST calendar day** (start inclusive from 00:00 IST, end = the whole day, so `startDate = endDate` is one day); a full ISO timestamp is taken literally. **Omit both = all time.** Unparseable or inverted = **400**. Does not filter the rows — only the counts. |
+| `includeInternal` | *(B7.1)* `1`/`true` counts attempts by internal accounts (staff email domains, the store-review demo logins, App Store sandbox owners). **Excluded by default** — the B1 rule (`sme-internal-accounts.util.ts`). |
+
+Every query key must be one of those above (the route validates its query through
+`SmeSimulationListQueryDto` and the global pipe runs `forbidNonWhitelisted`; anything else
+is a 400 — before B7 unknown keys were silently ignored).
+
+**`attempts`** (always present, `0`s when nobody started the test in the window):
+
+| Field | Meaning |
+|---|---|
+| `started` | `simulation_attempts` rows for this test whose `startedAt` is in the window. The app creates the row in `SimulationService.startAttempt` (inside the same transaction that pre-creates the answers — a test with no questions rolls it back), and allows **one attempt per user per test** (no re-attempts), so this is also the number of people. |
+| `submitted` | Of those same attempts, the ones with `submittedAt` set — finished by the user or auto-submitted when the timer ran out (`SimulationService.submitAttempt`). `started − submitted` = still open or abandoned. Always `≤ started`. |
+
+One grouped query per list (no per-row reads). The same block is on `GET
+/sme/content/simulations/:id` with the same `startDate` / `endDate` / `includeInternal` (§10.1).
+
+<!-- B7: from the REAL controller + services run against the STAGING database via ts-node
+     (the route is not deployed, so no HTTP capture exists yet); 2026-11-03 -->
+`GET /sme/content/simulations?exam=upsc-cse&language=en&includeInternal=1&startDate=2026-10-28&endDate=2026-10-29`
+→ 7 rows; one shown verbatim:
+
+```json
+{
+  "id": "91e44469-97ea-4719-af26-27527040908f",
+  "name": "Simulation - 03",
+  "description": "Auto-generated mock test #3 from MCQ.xlsx",
+  "durationMinutes": 120, "totalQuestions": 100,
+  "correctMark": 2, "wrongMark": -0.6666667, "skippedMark": 0,
+  "color": "#FCDB7D", "sortOrder": 4, "isActive": true,
+  "createdAt": "2026-05-08T10:07:08.486Z", "updatedAt": "2026-06-03T09:05:37.874Z",
+  "examIds": ["upsc-cse"],
+  "language": "en",
+  "attempts": { "started": 1, "submitted": 1 }
+}
+```
+
+Hand SQL on staging for the same window (`startedAt` in `[2026-10-27 18:30Z, 2026-10-29
+18:30Z)`, en, upsc-cse or `*`) gives Simulations 01–04 at 1 / 1 each — the four rows the
+route reports non-zero. Without `includeInternal` every staging row reads `0 / 0`: all nine
+staging attempts belong to internal accounts.
 
 ```bash
 curl -H "x-api-key: $API_KEY_SECRET" \
@@ -1068,8 +1113,10 @@ curl -X PATCH {{BASE_URL}}/api/v1/sme/content/pyq/<id> \
   `boardDeleted: true` is also accepted; the stored letter is then never served).
 - The letter **format** is only checked on a value you actually send, so a typo fix on an
   old row never fails over a legacy value you did not touch.
-- **Bulk is all-or-nothing** and the message names the item: `items[3]: correctAnswer is
-  required unless boardDeleted is true — …`.
+- **Keyed bulk (`/sme/content/pyq/bulk`) is per row** (B4.6): a row that fails is listed in
+  `results[]` with its message (`items[3]: correctAnswer is required unless boardDeleted is
+  true — …`) and the good rows are written; `400` only when every row fails. **`/cms/pyq/bulk`
+  stays all-or-nothing**, with the same per-item message.
 
 Verbatim (single-string `message`, unlike the validator arrays in §3.1):
 
@@ -1167,15 +1214,16 @@ Owner ruling 2026-11-03: every keyless route the portal calls (`/cms/*`, `/conte
 `/reels`, `/videos/*`) gets a keyed `/sme/*` twin with the same functionality end to end;
 the keyless routes stay. "≡" below = same status, rows and error body on the same input,
 pinned by `src/modules/sme/sme-keyless-parity.spec.ts` (one fixture, both route families,
-the real services). Shapes in this section are from code + that suite, **not** staging
-captures (nothing in lane B4 was deployed).
+the real services). Shapes in this section are from code + that suite, not HTTP captures
+(lane B4 was not deployed when this was written; it is LIVE on staging and production since
+2026-11-03, `upsc:165`).
 
 ### 10.1 PYQ / Mains / Simulations — by id, lookup, DELETE
 
 | Keyless | Keyed | |
 |---|---|---|
 | `GET /cms/pyq/:id`, `GET /cms/mains/:id` | `GET /sme/content/pyq/:id`, `…/mains/:id` | ≡ (same service; inactive rows returned with `isActive:false`; non-UUID → 400; unknown → 404 `PYQ paper with ID <id> not found`) |
-| — (portal derived it from the list) | `GET /sme/content/simulations/:id` | the list row; 404 `Simulation <id> not found` |
+| — (portal derived it from the list) | `GET /sme/content/simulations/:id` | the list row, **with `attempts: {started, submitted}`** (B7.1; query `startDate`, `endDate`, `includeInternal` as in §3.7 — any other key is a 400); 404 `Simulation <id> not found` |
 | `GET /cms/simulations/questions?externalIds=` | `GET /sme/content/simulations/questions?externalIds=` | ≡ — matches only, order not guaranteed |
 | `DELETE /cms/pyq/:id`, `/cms/mains/:id` (**hard**) | `DELETE /sme/content/pyq/:id`, `…/mains/:id` | **soft** — see below |
 | `DELETE /cms/simulations/:id` (soft) | `DELETE /sme/content/simulations/:id` | soft, plus the audit row |

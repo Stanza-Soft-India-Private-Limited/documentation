@@ -148,14 +148,22 @@ Content-Type: application/json
   "answerExplanation": "Article 19 rights are available only to citizens, not to foreigners.",
   "solveTip": "Remember: Articles 15, 16, 19, 29, 30 are citizen-only rights.",
   "difficulty": "MEDIUM",
+  "source": "PYQ_THEME",
+  "nature": "CORE",
   "questionNumber": 12,
   "totalMarks": 2,
+  "duration": 72,
   "tags": ["fundamental-rights", "article-19"],
   "keywords": ["citizen rights", "article 19"],
-  "isActive": true,
-  "isVerified": false
+  "relatedTopics": ["Article 21"]
 }
 ```
+
+> `isActive` / `isVerified` are **not** accepted here (nor on `PATCH`): the generated
+> create/update DTOs have neither key and `forbidNonWhitelisted` 400s the whole request
+> (`property isVerified should not exist`). A PYQ/Mains row is created active and
+> unverified; to hide one use the keyed soft delete `DELETE /sme/content/pyq/:id`
+> (SME_CONTENT_INGEST_API §10.1).
 
 **Response (201):** Returns the created question with a generated UUID `id`, `createdAt`, `updatedAt` and the normalised `examIds` actually stored.
 
@@ -192,11 +200,11 @@ Content-Type: application/json
   "prediction": "HIGH",
   "tags": ["basic-structure", "constitutional-amendment"],
   "keywords": ["Kesavananda Bharati", "basic structure"],
-  "relatedTopics": ["Judicial Review", "Constitutional Amendments"],
-  "isActive": true,
-  "isVerified": false
+  "relatedTopics": ["Judicial Review", "Constitutional Amendments"]
 }
 ```
+
+> As for PYQ: `isActive` / `isVerified` are not accepted on Mains create or `PATCH` (400).
 
 **Response (201):** Returns the created Mains question with a generated UUID `id`.
 
@@ -399,10 +407,11 @@ Update a PYQ question. Send only the fields you want to change.
 
 ```json
 {
-  "difficulty": "HARD",
-  "isVerified": true
+  "difficulty": "HARD"
 }
 ```
+
+(`isVerified` / `isActive` are not on the update DTO — sending either is `400 property … should not exist`.)
 
 **`examIds` on a PATCH:** omit the key and the row's tags are left completely alone —
 normalisation only runs when the key is present, so an unrelated edit can never re-tag the
@@ -489,10 +498,11 @@ Update a Mains question. Send only the fields you want to change.
 
 ```json
 {
-  "answer": "Updated model answer...",
-  "isVerified": true
+  "answer": "Updated model answer..."
 }
 ```
+
+(`isVerified` / `isActive` are not on the update DTO — sending either is a `400`.)
 
 Same `examIds` merge rule as PYQ: omitted = untouched, `[]` = `["upsc-cse"]`.
 
@@ -812,7 +822,7 @@ Hard delete — permanently removes the test set from the database.
 | `year`              | integer  | yes      | —       | Exam year                                        |
 | `paperNumber`       | integer  | no       | —       | Paper number (1, 2, etc.)                        |
 | `subject`           | string   | yes      | —       | e.g., "Polity", "Geography", "History"           |
-| `topic`             | string   | no       | —       | Specific topic within subject                    |
+| `topic`             | string   | **yes**  | —       | Specific topic within subject (`@IsNotEmpty`)    |
 | `question`          | string   | yes      | —       | Full question text                               |
 | `optionA`           | string   | yes      | —       | Option A text                                    |
 | `optionB`           | string   | yes      | —       | Option B text                                    |
@@ -829,13 +839,13 @@ Hard delete — permanently removes the test set from the database.
 | `totalMarks`        | integer  | no       | —       | Marks for the question                           |
 | `duration`          | integer  | no       | —       | Expected time in seconds                         |
 | `markingScheme`     | string   | no       | —       | e.g., "+2/-0.66"                                 |
-| `tags`              | string[] | no       | `[]`    | Tags for categorization                          |
-| `keywords`          | string[] | no       | `[]`    | Search keywords                                  |
-| `relatedTopics`     | string[] | no       | `[]`    | Cross-referenced topics                          |
+| `tags`              | string[] | **yes**  | —       | Tags for categorization (`[]` is accepted)       |
+| `keywords`          | string[] | **yes**  | —       | Search keywords (`[]` is accepted)               |
+| `relatedTopics`     | string[] | **yes**  | —       | Cross-referenced topics (`[]` is accepted)       |
 | `prediction`        | string   | no       | —       | Prediction score/label                           |
 | `weightage`         | float    | no       | —       | Topic weightage                                  |
-| `isActive`          | boolean  | no       | `true`  | Visibility flag — set `false` to hide from users |
-| `isVerified`        | boolean  | no       | `false` | Review/QA flag — set `true` after verification   |
+| `isActive`          | boolean  | —        | `true`  | **Not writable** here (create or PATCH → 400). Read-only on the row |
+| `isVerified`        | boolean  | —        | `false` | **Not writable** here (create or PATCH → 400). Read-only on the row |
 
 > ⚠️ **The Required column above understates it.** The create DTO is generated from
 > `prisma/schema.prisma` (`pyq_papers`), where `difficulty`, `source`, `nature`,
@@ -854,7 +864,7 @@ Hard delete — permanently removes the test set from the database.
 | `examName`          | string   | yes      | —       | e.g., "UPSC CSE Mains"                   |
 | `year`              | integer  | yes      | —       | Exam year                                |
 | `subject`           | string   | yes      | —       | e.g., "GS Paper 2", "Essay"              |
-| `topic`             | string   | no       | —       | Specific topic within subject            |
+| `topic`             | string   | **yes**  | —       | Specific topic within subject            |
 | `question`          | string   | yes      | —       | Full question text                       |
 | `answer`            | string   | no       | —       | Model answer text                        |
 | `answerExplanation` | string   | no       | —       | Additional explanation or approach notes |
@@ -862,12 +872,12 @@ Hard delete — permanently removes the test set from the database.
 | `difficulty`        | enum     | no       | —       | `EASY`, `MEDIUM`, `HARD`, `EXPERT`       |
 | `questionNumber`    | integer  | no       | —       | Position in paper                        |
 | `prediction`        | string   | no       | —       | Prediction score/label                   |
-| `tags`              | string[] | no       | `[]`    | Tags for categorization                  |
-| `keywords`          | string[] | no       | `[]`    | Search keywords                          |
-| `relatedTopics`     | string[] | no       | `[]`    | Cross-referenced topics                  |
-| `isActive`          | boolean  | no       | `true`  | Visibility flag                          |
-| `isVerified`        | boolean  | no       | `false` | Review/QA flag                           |
-| `marks`             | integer  | no       | `10`    | Marks for the question                   |
+| `tags`              | string[] | **yes**  | —       | Tags for categorization (`[]` accepted)  |
+| `keywords`          | string[] | **yes**  | —       | Search keywords (`[]` accepted)          |
+| `relatedTopics`     | string[] | **yes**  | —       | Cross-referenced topics (`[]` accepted)  |
+| `isActive`          | boolean  | —        | `true`  | **Not writable** here (400). Read-only   |
+| `isVerified`        | boolean  | —        | `false` | **Not writable** here (400). Read-only   |
+| `marks`             | integer  | —        | `10`    | **Not accepted on `/cms/mains`** (400); returned on rows. Write it via `/sme/content/mains` (1–50) |
 | `isOptional`        | boolean  | no       | derived | Optional-subject paper. Derived on **create** from a `" Optional"` suffix on `subject` when omitted; never re-derived on `PATCH` |
 
 > ⚠️ Same caveat as PYQ: `difficulty` is NOT NULL with no default in
@@ -942,7 +952,8 @@ curl -X POST {{BASE_URL}}/api/v1/cms/pyq \
     "correctAnswer": "B",
     "answerExplanation": "Allan Octavian Hume founded the INC in 1885.",
     "totalMarks": 2,
-    "duration": 72
+    "duration": 72,
+    "tags": [], "keywords": [], "relatedTopics": []
   }'
 ```
 
@@ -988,7 +999,8 @@ curl -X POST {{BASE_URL}}/api/v1/cms/pyq/bulk \
         "optionD": "Brahmaputra Valley",
         "correctAnswer": "B",
         "totalMarks": 2,
-        "duration": 72
+        "duration": 72,
+        "tags": [], "keywords": [], "relatedTopics": []
       },
       {
         "examIds": ["*"],
@@ -1007,7 +1019,8 @@ curl -X POST {{BASE_URL}}/api/v1/cms/pyq/bulk \
         "optionD": "Bangladesh",
         "correctAnswer": "B",
         "totalMarks": 2,
-        "duration": 72
+        "duration": 72,
+        "tags": [], "keywords": [], "relatedTopics": []
       }
     ]
   }'
@@ -1027,7 +1040,8 @@ curl -X POST {{BASE_URL}}/api/v1/cms/mains \
     "question": "Examine the role of caste in Indian politics and its impact on democratic governance.",
     "answer": "Caste has been a significant factor in Indian politics since independence...",
     "difficulty": "HARD",
-    "tags": ["caste", "politics", "democracy"]
+    "tags": ["caste", "politics", "democracy"],
+    "keywords": [], "relatedTopics": []
   }'
 ```
 
@@ -1051,7 +1065,8 @@ curl -X POST {{BASE_URL}}/api/v1/cms/mains/bulk \
         "subject": "GS Paper 2",
         "topic": "Governance",
         "question": "Discuss the role of civil services in policy implementation.",
-        "difficulty": "MEDIUM"
+        "difficulty": "MEDIUM",
+        "tags": [], "keywords": [], "relatedTopics": []
       },
       {
         "examIds": ["upsc-cse"],
@@ -1060,7 +1075,8 @@ curl -X POST {{BASE_URL}}/api/v1/cms/mains/bulk \
         "subject": "GS Paper 2",
         "topic": "Governance",
         "question": "Evaluate the impact of RTI Act on transparency in governance.",
-        "difficulty": "MEDIUM"
+        "difficulty": "MEDIUM",
+        "tags": [], "keywords": [], "relatedTopics": []
       }
     ]
   }'
@@ -1208,10 +1224,13 @@ curl "{{BASE_URL}}/api/v1/cms/psychometric/test-sets?page=1&limit=10"
    module you just loaded into means the tags did not land. Do this before anything else;
    a mis-tagged load gets harder to unpick the longer it sits.
 3. **Review:** List questions with filters (`?exam=<slug>&isVerified=false`) to verify data quality
-4. **Verify:** `PATCH` individual questions to set `isVerified: true` after review
+4. **Verify:** there is no write for `isVerified` on PYQ/Mains (a `PATCH` carrying it is a
+   400); it is writable only on psychometric questions and simulations
 5. **Organize (Psychometric):** Create test sets by grouping verified Psychometric question UUIDs
 6. **Organize (Simulations):** create the simulation → bulk-create its questions → `assign-questions`
-7. **Deactivate:** `PATCH` with `{ "isActive": false }` to hide content from users without deleting
+7. **Deactivate:** PYQ/Mains cannot be deactivated through `/cms` (`isActive` on a `PATCH` is
+   a 400) — use the keyed soft delete `DELETE /sme/content/{pyq,mains}/:id` (body
+   `{actor, reason}`); simulations and psychometric accept `PATCH { "isActive": false }`
 8. **Clean up:** Use `DELETE` only for permanently removing incorrect or duplicate entries
    (note `DELETE /cms/simulations/:id` is a **soft** delete, unlike PYQ and Mains)
 
@@ -1226,18 +1245,24 @@ curl "{{BASE_URL}}/api/v1/cms/psychometric/test-sets?page=1&limit=10"
 | 400    | Bulk create exceeds 100 items | Split into multiple requests of 100 or fewer (simulation *questions* allow 500) |
 | 400    | `Unknown exam "<slug>". Create it via POST /sme/exams first.` | Only from **`?exam=`** on a list call. A bad slug in a create **body** never 400s here — it is either stored verbatim (if well-formed) or dropped to `["upsc-cse"]` (if malformed) |
 | 404    | Resource not found            | Verify the UUID is correct and the resource exists                       |
-| 422    | Invalid UUID format           | Ensure `:id` params are valid UUIDs                                      |
-| 422    | Invalid enum value            | Use exact enum values: `EASY`, `MEDIUM`, `HARD`, `EXPERT` for difficulty |
+| 400    | `Validation failed (uuid is expected)` | `ParseUUIDPipe` on `:id` — ensure `:id` params are valid UUIDs |
+| 400    | Invalid enum value            | The global ValidationPipe — use exact enum values: `EASY`, `MEDIUM`, `HARD`, `EXPERT` for difficulty |
 
 ### Error Response Format
 
 ```json
 {
+  "success": false,
+  "message": ["examName should not be empty"],
+  "error": "Bad Request",
   "statusCode": 400,
-  "message": "Validation failed: examName should not be empty",
-  "error": "Bad Request"
+  "timestamp": "2026-11-03T14:43:22.333Z",
+  "path": "/api/v1/cms/pyq",
+  "method": "POST"
 }
 ```
+(The global exception filter, `src/common/filters/exception.filter.ts`; a validation
+failure's `message` is the validator's array, other 400s a single string.)
 
 ---
 

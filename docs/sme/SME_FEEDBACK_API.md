@@ -325,11 +325,10 @@ One rating in the entire production history — and **it failed to forward**:
 
 `difyError: "no_api_key"` means `DIFY_APP_KEYS` has no entry for the `mentor` mode on the
 environment that served that request, so the forward short-circuited before it was attempted.
-**100% of chat ratings collected so far have failed to reach Dify.** This is a real,
-outstanding production configuration gap, not a sample artefact — it is reported here rather
-than smoothed over, and it is exactly the case `difyForwardFailures` exists to surface. It
-also means `byRating` was, at the time of that measurement, the only usable field on this
-endpoint.
+**Until 2026-10-12 every chat rating failed to reach Dify** (`DIFY_APP_KEYS` was never set
+on production) — exactly the case `difyForwardFailures` exists to surface. The key has since
+landed: `from=2026-10-13` returns 0 failures of 20 on prod (§2 above). Rows rated before the
+fix keep their `no_api_key` error; scope the card with `from` to judge the current state.
 
 **On `topChips`:** the backend write path is **live and always has been** —
 `ChatFeedbackService.submit` persists `dto.chips` straight onto
@@ -698,7 +697,8 @@ responseId,userId,userTier,platform,aspirantType,answeredAt,Smoke question?,How 
 
 **Questions it answers.** "What do users think about X?", where X is whatever you asked —
 this is the only surface in the product where you get to choose the question. Plus the
-operational ones: "did anyone answer?" (`responseCount`), "who ignored it?"
+operational ones: "did anyone answer?" (`counts.answered` — NOT the list's `responseCount`,
+which counts every response row: answered + snoozed + dismissed), "who ignored it?"
 (`counts.snoozed` / `counts.dismissed`).
 
 **The decision it drives.** Authoring side: who to target and when to activate/close.
@@ -779,9 +779,9 @@ the action): `FEEDBACK_REPORT_STATUS`, `FEEDBACK_REPORT_REPLY`,
   only Dify call this backend makes — chat turns, mains evaluation, flashcards and
   practice-similar all go client→Dify direct and never touch us. A missing per-subject
   key (`DIFY_APP_KEYS`) shows up as `difyError=no_api_key` in the chat summary — it
-  never fails the user's thumb. ⚠️ **On production today there is no `mentor` key, so
-  every forward fails and `difyForwardFailures` equals `total`.** That is a live
-  server-side config gap, not a portal bug — see §2.
+  never fails the user's thumb. Production had no key until 2026-10-12 (every earlier
+  forward failed); since then forwards succeed (prod: 0 failures of 20 from 2026-10-13) —
+  see §2.
 - **Tier** everywhere is PostgreSQL-derived, not the graph.
 - **IST** — the report list `from`/`to` are IST calendar dates.
 - **Volume was near zero when this was written.** As of 2026-07-23: 0 reports, 1 chat rating

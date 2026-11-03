@@ -17,7 +17,11 @@ it the form is currently not exposing.
 
 ## 0. Why this doc exists
 
-The form is missing **four fields the API already accepts**, and one of them — `priceInPaise` — is the
+> **Status 2026-11-03:** the portal form now has all of them (`pages/Offers.tsx`: price,
+> `appleOfferCode`, `appleProductId`). The history below is kept because the backend's MERGE on
+> PATCH exists because of it.
+
+The form was missing **four fields the API already accepts**, and one of them — `priceInPaise` — is the
 only field that decides what a customer is actually charged.
 
 Because the form has no input for it, a normal "Save changes" used to send a `plans` array **without**
@@ -135,7 +139,7 @@ save fails**. Upper-case the input as the operator types, and reject anything el
 | Label | **"App Store product ID"** |
 | API field | `appleProductId` (string, max 200, already accepted) |
 
-The sibling of `appleOfferCode` and equally unexposed today. It is how an incoming Apple transaction
+The sibling of `appleOfferCode` (the portal form has an input for it since 2026-11). It is how an incoming Apple transaction
 is matched back to this tier for price-drift detection. FREEDOM15 has it set
 (`com.stanzasoft.upscbuddy.premium.annual`) only because it was written by direct API call. Same
 reasoning as `priceInPaise`: while the form cannot set it, no operator can tell whether it is right.

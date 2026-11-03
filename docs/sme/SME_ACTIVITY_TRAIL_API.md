@@ -174,11 +174,12 @@ reports `available: true` with a user who looks like they've used nothing today.
 same failure mode behind the "OTP expired for everyone" incidents. If quota numbers look
 impossibly clean across multiple users, suspect Redis before you suspect the user.
 
-**4. Streak comes from Neo4j, the least-trusted store in the stack.**
-Known stale/duplicate `User` nodes exist from past manual Postgres deletions. A driver failure
-or a missing node degrades to `available: false` + `unavailableReason` rather than failing the
-whole snapshot. **`available: false` must never render as "0-day streak"** — it means "we
-couldn't read it", which is a different sentence to a support agent.
+**4. Streak comes from Postgres `user_auth`** (authoritative since `3c8bc41`, 2026-08-26; the
+snapshot stopped reading the Neo4j shadow in audit 2026-11 U11). It is therefore always
+`available: true`, `unavailableReason: null`, `source: "postgres"`. `currentStreak` is the
+**live** value (0 once the last credited IST day is older than yesterday); `storedStreak` is
+the stored counter the app keeps showing on purpose; `live` says which case you are in. Render
+both when they differ: "the app shows 2 · the streak broke on 17 Sep".
 
 **5. The mobile-emitted signals are LIVE as of app 2.0, but only from devices that have updated.**
 `client_error`, `paywall_viewed`, `upgrade_tapped`, `checkout_opened`, `checkout_abandoned`,
@@ -225,8 +226,11 @@ field rather than the request.
 **Response 200** (raw — this whole object is the body)
 
 <!-- captured from staging 2026-09-21, backend f6329e6 -->
-`GET /sme/users/0d2f8b41-9a3c-4f2e-8c71-2b6d5a1e7f30/snapshot` — verbatim, nothing
-elided:
+`GET /sme/users/0d2f8b41-9a3c-4f2e-8c71-2b6d5a1e7f30/snapshot` — verbatim as captured on
+2026-09-21. ⚠️ **Since then the body has grown and one block changed:** `timeInApp`,
+`entitlement.paymentAttempts[]` (lane B1.2) and `streak.source/live/storedStreak` were added,
+and `streak` is now read from Postgres (limitation 4) — the `available: false` streak below can
+no longer be produced:
 
 ```json
 {
@@ -354,18 +358,18 @@ elided:
 **Three things in that capture the portal must handle, and they are easy to miss in a
 hand-written mock:**
 
-1. **`streak.available: false` with a populated `unavailableReason`.** Staging's Neo4j is
-   unreachable, and this is exactly the degraded shape the endpoint is designed to
-   return: `currentStreak` / `maxStreak` / `lastActiveDate` all `null`, and a string
-   saying why. **Render the reason, not a zero.** "Streak unavailable" and "streak is 0"
-   are different answers to a support ticket. The same contract holds in production for
-   any transient Neo4j outage.
+1. **`streak.available: false` (OBSOLETE — 2026-09-21 capture only).** It was Neo4j's
+   degraded shape. The streak is Postgres-backed now and always `available: true`; today's
+   shape is `{ available: true, currentStreak, maxStreak, lastActiveDate, unavailableReason:
+   null, source: "postgres", live, storedStreak }`.
 2. **`clients.appVersions[0]` has `appVersion: null` and `platform: null`.** That is the
    bucket for requests that arrived without version headers (server-side / older
    clients). It sorts first because it is the most recent `lastSeenAt`. Filter nulls out
    of a "which app version are they on?" readout, or the answer is blank.
-3. **`lastActiveAt` is `null` while `lastRequestAt` is minutes old.** They come from
-   different sources (see the field table) and do not degrade together.
+3. **`lastActiveAt` was `null` while `lastRequestAt` was minutes old** (2026-09-21 capture).
+   Since audit 2026-11 U11, `lastActiveAt` is the LATEST of `user_auth.last_active_at`, the
+   last session touch, the last request and the last client event — so it is never older
+   than `lastRequestAt`.
 
 **Field meanings**
 
@@ -382,7 +386,7 @@ hand-written mock:**
 | `entitlement.recentOrders[].examId` | Which exam the money bought. **Nullable** — Apple's payloads carry no exam, so an order whose signed product matched no `exam_plans` row is recorded unresolved rather than guessed. Those are the `UNRESOLVED_EXAM` reconcile cases (`SME_PORTAL_API.md` §2.3). |
 | `quota.examId` | **Which exam these quota numbers are for** — the user's `activeExamId`, or `upsc-cse` when unset. Caps come from that exam's `feature_caps` and the exemption from that exam's entitlement, so an unlabelled quota panel is a number nobody can act on. Present **even when `available: false`** — "which exam did we fail to read" is part of the diagnosis. Before 2026-09-21 this panel always reported UPSC's allowance, whoever you were looking at. |
 | `quota.*` | See limitation 3. `features` is `Record<featureKey, …>` whose value shape varies by cap type: `{ unlimited: true, type }` for premium; `{ used, limit, remaining, type: 'daily' \| 'lifetime' }`, `{ type: 'lifetime_per_subject', limit, perSubject: true }`, or `{ type: 'premium_only' }` for free. Render generically off `type`. |
-| `streak.*` | See limitation 4. `lastActiveDate` is a Neo4j-supplied `YYYY-MM-DD` string. |
+| `streak.*` | See limitation 4. `lastActiveDate` is `user_auth.last_streak_date` (the last credited IST day), `YYYY-MM-DD`. |
 | `activity.retention` | Same object as the timeline's `meta.retention` (limitation 1) — the `api_usage` count is the one that goes quiet past 30 days. |
 | `activity.counts` | One bounded `COUNT` per source over the window. Keys match the timeline `source` values, so a count tile can deep-link straight into `?sources=<key>`. **16 keys, not 17** — there is no `payments` count, because the `payments` table has no `user_id` and counting it would need the order fan-out. `custom_tasks` counts only user-created tasks (`sourceId IS NULL`) — auto-seeded planner content is excluded on purpose. `payment_events` counts on `receivedAt`; `simulation_attempts` on `startedAt`; everything else on `createdAt`. |
 | `lastSeen.lastRequestAt/Route` | From `api_usage` — subject to limitation 1. `null` for a user who hasn't made an authenticated request since capture shipped / within retention. |
@@ -421,8 +425,9 @@ minutes old) returned `premiumState: "Trial"`, `trialDaysLeft: 14`, `activity.to
 `available: true`, and `clients.appVersions: [{ appVersion: null, platform: null }]`. That is
 the *normal* shape for most users today, and it is the shape your empty states have to look
 good in: a brand-new user on a pre-1.7 build who has done nothing yet. Note the trap in that
-payload — `streak.available: true` with a `0` streak is a **real** zero, whereas
-`available: false` would mean "Neo4j didn't answer". Those must not render identically.
+payload — `streak.available: true` with a `0` streak is a **real** zero (the streak is
+Postgres-backed and always available); check `storedStreak` — the app may still be showing a
+non-zero stale count.
 
 ---
 
@@ -997,8 +1002,9 @@ portal team should know how they arrive.
 - **Routes:** `POST /api/v1/diagnostics/events` **and** `POST /api/v1/diagnostics/auth-events` —
   two paths, **one handler, identical semantics**. `events` is the honest name now that the sink
   carries general client events; `auth-events` is kept **forever** because 1.6/1.7 builds already
-  in the field call it and will never be updated. (Current store build is **2.0** — Android 27,
-  iOS 2.0 build 3, released 2026-09-17 — and it calls `events`.)
+  in the field call it and will never be updated. (Store build when this was written was **2.0**
+  — Android 27, iOS 2.0 build 3, released 2026-09-17 — which calls `events`. App 2.1 has since
+  shipped and 2.2 is due 2026-11-03.)
 - **`@Public()` by design** — the whole point is capturing failures *before* a user is
   authenticated (login/OTP/refresh). Not an `x-api-key` surface.
 - **Responses:** `204` accepted (no body), `429` rate-limited (**silent — no body, nothing
@@ -1055,7 +1061,8 @@ this project — verify via `information_schema`, not Prisma's migration state).
 
 - **Success bodies are raw. No `{ success, data }`. Branch on HTTP status.**
 - Render `meta.from` / `meta.to` — not the window you asked for. The server clamps to 90 days.
-- `available: false` on quota/streak means "couldn't read it", **not** zero.
+- `available: false` on **quota** means "couldn't read it", **not** zero. The streak is
+  Postgres-backed and always `available: true` (compare `currentStreak` with `storedStreak`).
 - `permissionGranted: null` means "old client build", **not** denied.
 - `deviceCountCapped: true` means `50+`, not `50`.
 - Money fields on this surface are already in major units — don't divide by 100 again.

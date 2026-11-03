@@ -428,8 +428,10 @@ Moving the window of a `SCHEDULED`/`LIVE` campaign re-runs the overlap check.
 > one level deep. The array you send still defines the **set and order** of tiers, so omitting a tier
 > removes it and adding one appends it; inheritance applies only *within* a matched tier.
 >
-> This exists because the portal's offer form has no `priceInPaise` / `appleOfferCode` /
-> `appleProductId` input. Under the old replace-wholesale behaviour, saving an unrelated edit deleted
+> This exists because the portal's offer form had no `priceInPaise` / `appleOfferCode` /
+> `appleProductId` input at the time (it has all three now — portal `pages/Offers.tsx` — and
+> the merge stays as the safety net for any client that omits them). Under the old
+> replace-wholesale behaviour, saving an unrelated edit deleted
 > those keys and the campaign kept advertising its discounted price while charging the standard one —
 > which happened to the live `FREEDOM15` campaign on 2026-08-15 and went unnoticed for two days
 > because nothing errors. **A client must never be able to delete a field it doesn't know exists.**
@@ -588,7 +590,8 @@ each of its plans owns a product (`exam_plans.apple_product_id`, globally unique
 `appleOfferCode` / `appleProductId` on a tier must belong to **`examId`'s** product — an
 offer code configured against UPSC's product does nothing for an APPSC campaign, and the
 mismatch is invisible until an iPhone user is served the standard paywall. Source the
-product id from `GET /sme/exams`, for the exam you just selected, not from memory.
+product id from `GET /sme/exams/:id/plans` (the plan's `appleProductId`), for the exam you
+just selected, not from memory — `GET /sme/exams` carries no plans.
 
 ## 8. Previewing before launch
 

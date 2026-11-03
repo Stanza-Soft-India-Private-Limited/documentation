@@ -34,7 +34,9 @@ change to `/sme/webhooks` (see §0).
 **subscription group** (`exams.apple_subscription_group_id`) and each of its plans owns a
 product (`exam_plans.apple_product_id`, **globally unique** — two exams can never share
 one). The set of live product ids is therefore whatever `exam_plans` currently holds; read
-it from `GET /sme/exams` rather than from a list in a doc.
+it per exam from `GET /sme/exams/:id/plans` (each plan's `appleProductId`) rather than from
+a list in a doc — `GET /sme/exams` returns the exam rows only (it carries
+`appleSubscriptionGroupId`, not the plans).
 
 That uniqueness is load-bearing: Apple's verify and webhook payloads **carry no exam**, so
 the *only* way to know what was bought is the reverse lookup from the signed `productId`
@@ -90,7 +92,7 @@ GET /sme/transactions?source=APPLE&page=1&limit=20&userId=&paymentStatus=&exam=&
 | paymentStatus | `PENDING, AUTHORIZED, CAPTURED, FAILED, REFUNDED`. Apple captures land as **`CAPTURED`**. |
 | userId | payments for one user (UserAuth id) |
 | **exam** | Filters on the **parent order's** `exam_id` — same mechanism as `userId`/`source`. Pass a slug, or the literal **`none`** for orders with no exam (the unresolved Apple products, §2). **400 on an unknown slug.** |
-| startDate / endDate | ISO date bounds on `createdAt` |
+| startDate / endDate | Bounds on `createdAt`. A bare `YYYY-MM-DD` is an **IST calendar day** (start inclusive from 00:00 IST, end = the whole day, so `startDate = endDate` is one day); a full ISO timestamp is taken literally; unparseable → 400 (lane B1.4) |
 | search | payer/user email (note: Apple rows have no `razorpayPaymentId`; search by email) |
 | **includeTest** | `true` to include App Store **sandbox** purchases. **Default `false`** — sandbox hits production, so leaving them in inflates every revenue figure. |
 
@@ -116,7 +118,6 @@ GET /sme/transactions?source=APPLE&page=1&limit=20&userId=&paymentStatus=&exam=&
 {
   "id": "…",
   "orderId": "…",
-  "razorpayPaymentId": null,
   "appleTransactionId": "2000000812345678",
   "amount": 499,
   "currency": "INR",
@@ -201,7 +202,6 @@ shape from code):
 {
   "id": "…",
   "userId": "…",
-  "razorpayOrderId": null,
   "appleTransactionId": "2000000812345678",
   "paymentSource": "APPLE",
   "planType": "ANNUAL",
@@ -271,8 +271,10 @@ and it is already labelled `isTest`.
 **Other notes:**
 - `premiumGrantedAt` is stamped on healthy Apple orders. It is also the **idempotency
   marker** — it is what stops a redelivered webhook extending premium twice.
-- `razorpayOrderId` is null; the Apple identity is `appleTransactionId` +
-  `appleOriginalTransactionId` (the stable id that survives renewals — see §3).
+- `razorpayOrderId` / `razorpayPaymentId` are **absent** on Apple rows (the formatter maps
+  null to `undefined`, so the key is dropped — test for absence, not `null`); the Apple
+  identity on an SME row is `appleTransactionId`. `appleOriginalTransactionId` (the stable id
+  that survives renewals) is stored on the order but **not emitted** on any SME row.
 
 ---
 
@@ -382,7 +384,7 @@ encoded.
 | `source` / `provider` | `"apple"` or `"razorpay"` (lowercase). **Back-compat:** `source` mirrors `provider`. |
 | `payload` / `rawBody` | The raw event body. For Apple this is the **signed JWS string** (not JSON) — display as-is or decode client-side; for Razorpay it is the raw JSON string. |
 | `kind` | `"webhook"` (this endpoint only returns provider webhooks/notifications). |
-| `result` | Outcome: `processed` (applied), `orphan` (no user resolvable yet), `error` (threw — see `error`). |
+| `result` | Outcome: `processed` (applied), `orphan` (no user resolvable yet), `ignored` (a notification for the other App Store environment, e.g. sandbox on production — recorded, not applied), `error` (threw — see `error`). |
 | `error` | Error message when `result = "error"`, else null. |
 | `userId` / `orderId` | Resolved app ids when known (may be null for orphan/early events). |
 | **`examId`** | Read off the **order the event was matched to** — `payment_events` carries no exam of its own, it is the raw provider envelope. `null` when the event matched no order (unknown Apple product, a webhook for a foreign account) or when the order it matched has no resolved exam. One extra query per page, not per row. |
@@ -442,8 +444,8 @@ encoded.
 - **A `PAID` Apple order can legitimately have no exam** (`examId: null`,
   `reconcileHint: "UNRESOLVED_EXAM"`). Seed `exam_plans`, then grant — never guess.
 - **Renewals create new orders.** A long-lived subscriber will have many Apple `Order`
-  rows (one per period). Group by `appleOriginalTransactionId` (visible in detail) or by
-  `userId` if you want a per-subscription view.
+  rows (one per period). Group by `userId` (+ `examId`) for a per-subscription view —
+  `appleOriginalTransactionId` is not exposed on SME rows (list or detail).
 - **Live Swagger is the source of truth** for exact params: `/api/docs`, group **SME**.
 
 ---
@@ -460,5 +462,5 @@ encoded.
 | Razorpay event stream (unchanged) | `GET /sme/webhooks?source=RAZORPAY` |
 | Apple purchases for **one exam** | `GET /sme/orders?source=APPLE&exam=appsc-group-1` |
 | Apple money taken for an **unknown product** | `GET /sme/orders?source=APPLE&exam=none` |
-| Which product ids / subscription groups exist | `GET /sme/exams` (`exam_plans.appleProductId`, `exams.appleSubscriptionGroupId`) |
+| Which product ids / subscription groups exist | `GET /sme/exams/:id/plans` (`appleProductId` per plan); `GET /sme/exams` (`appleSubscriptionGroupId` per exam — no plans on that route) |
 | Both providers' events | `GET /sme/webhooks` |

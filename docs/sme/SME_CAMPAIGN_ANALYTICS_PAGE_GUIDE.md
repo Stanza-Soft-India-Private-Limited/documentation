@@ -117,8 +117,10 @@ One horizontal funnel, four stages, each showing **distinct users** and the drop
 Rules:
 - Label the unit **users** on every stage. Show `orderCount` only as a subtitle
   ("9 users · 17 orders"), never as a stage.
-- The `viewed` stage carries a persistent "since 20 Aug" badge while `viewedIsDeployForward` is
-  true. Do not silently draw a stage the data cannot support for the whole window.
+- `viewedIsDeployForward` is hard-coded `true`, and raw `api_usage` (the VIEW source) is purged
+  after 30 days — so the honest badge on the `viewed` stage is "last 30 days only" (plus "never
+  before 20 Aug"), not "since 20 Aug". Do not silently draw a stage the data cannot support for
+  the whole window.
 - Each drop is clickable and filters Band 3.
 
 ### Band 3 — who to chase (one table, `signal` as a column)
@@ -148,15 +150,17 @@ warning chip, never a silent fallback to the order amount.
 
 ## Cross-cutting rules
 
-1. **Add an "exclude internal accounts" toggle, default ON.** Filter the two internal staff email
-   domains (ask the backend team for the current list — they are configuration, not constants) on
-   the **domain part only**, the same rule already used for marketing exports.
-   Show the count that was hidden ("4 internal accounts hidden") so nothing disappears silently.
-   Without this the recovery list is unusable.
+1. **Internal accounts are excluded by the SERVER, by default** (lane B1.1): five staff email
+   domains, the store-review demo logins and App Store sandbox owners
+   (`sme-internal-accounts.util.ts`), from the rows AND the funnel. Do not filter on the client.
+   Offer an "include team accounts" toggle that re-asks with `includeInternal=1`, and show the
+   hidden count from `excluded.internal` so nothing disappears silently.
 2. **State the window you are describing**, from `window.from`/`window.to` — not the campaign dates.
    They now differ whenever `from` is set.
-3. **Bridge every exclusion.** Where the funnel's `joined` (9) exceeds the actionable rows (7), say
-   "2 excluded — already converted". An unexplained gap reads as a bug.
+3. **Bridge every exclusion.** Where the funnel's `joined` (9) exceeds the actionable rows (7),
+   say why from `excluded{internal, paidAfterwards, compedByStaff, holdsExam}` ("1 paid later ·
+   1 comped by staff") — `compedByStaff` replaces the old "already converted" label. An
+   unexplained gap reads as a bug.
 4. **Never sum `ORDER + TAP`** into one headline. If you need a total, label it approximate.
 5. **Paise, always.** `499900` = ₹4,999. Never render ₹0 where the value is `null` — use a dash.
 6. **Raw responses.** No `{success, data}` envelope on any `/sme/*` route.
@@ -187,7 +191,8 @@ Two more list-page changes, from 2026-09-21:
 
 ## What may be empty — plan for it
 
-- **`viewed` is 0 for any window before 2026-08-20.** This is a *capture start date*, not an app
+- **`viewed` is 0 for any window before 2026-08-20 — and for any window older than 30 days**
+  (raw `api_usage` is purged at 30 days). 2026-08-20 is a *capture start date*, not an app
   release: `VIEW` is stamped server-side by the paywall resolver, so it does not depend on which
   build the user is running. Do not render a funnel that implies nobody looked; render the
   "since 20 Aug" badge, or hide the stage entirely for older windows.

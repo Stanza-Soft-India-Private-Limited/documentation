@@ -4,10 +4,12 @@ Source of truth for the November 2026 backend contract lanes (audit:
 [AUDIT_2026-11.md](./AUDIT_2026-11.md) §6–§7). One section per lane. Portal lanes consume
 these sections — **P1 (money screens) reads §B1**.
 
-> **Status: committed on `main`, NOT deployed.** Nothing below is live on staging or
-> production until the owner deploys it. Every JSON example here is **"from DTO — replace
-> after staging deploy"**: built from the DTOs and the specs, with values taken from the
-> real staging runs logged during the lane, not captured from an HTTP response.
+> **Status (2026-11-03 night): B1–B4 and B6 are LIVE on staging and production.** B1–B4
+> rolled as prod `upsc:165` (staging `prepmonkeytesting:30`); B6 rolled on both at 19:27 IST
+> (AUDIT_2026-11.md §8). §B7 (at the end) is committed on branch `lane/b7` only, NOT deployed.
+> The B1 JSON examples below were re-captured from `https://staging-api.prepmonkey.com` over
+> HTTP on 2026-11-03 (personal fields masked `…`) and match the shapes first written from the
+> DTOs; each example says which it is.
 
 ---
 
@@ -125,10 +127,10 @@ never filtered; `recentOrders` is unchanged for compatibility):
   "isInternal": true,
   "isSandbox": false,
   "everCharged": false,
-  "user": { "email": "…", "name": "…", "phoneNumber": null }
+  "user": { "email": "…", "name": "…", "phoneNumber": "…" }
 }
 ```
-*(from DTO — replace after staging deploy; values from the staging run of the service.)*
+*(Captured from staging over HTTP 2026-11-03: `GET /sme/payment-attempts?userId=17ee1dee-…&kind=UPI_AUTOPAY_MANDATE&includeInternal=1&limit=1` → 200, page `total: 11`; personal fields masked.)*
 
 Page: `{ data, total, page, limit, hasMore, includeInternal, note }`.
 
@@ -179,7 +181,7 @@ money cards were client-side sums of our list pages (S01). Switch them to this:
   "note": "All-time, PER EXAM …"
 }
 ```
-*(from DTO — replace after staging deploy; staging default values.)*
+*(Captured from staging over HTTP 2026-11-03: `GET /sme/analytics/summary` → 200, `money` block verbatim except the elided `bySource`/`comps` objects inside `byExam[]`/`allExams` (same shape as the headline's). The body's other keys: `engagedDau24h, engagedWau7d, engagedMau30d, activeDau24h, activeMau30d, stickiness, includeInternal`.)*
 
 | Portal card today | Switch to |
 |---|---|
@@ -236,8 +238,9 @@ exam (`campaign.examId`), so its money is per-exam by construction:
   mandate id / notes.userId; Apple transaction / original transaction). Handling is
   unchanged. Old rows: `scripts/backfill-payment-event-links.ts` (dry run by default,
   `--write` fills NULLs only, idempotent; staging done — 33 of 38 rows linked; **production
-  is the owner's**: `--prod --write`). Once linked, `examId` on webhook rows and the
-  profile's "Payment webhooks" count become real.
+  done 2026-11-03 evening** with `--prod --write`: 127 users / 99 orders linked,
+  AUDIT_2026-11.md §8). `examId` on linked webhook rows and the profile's "Payment
+  webhooks" count are real for every row the payload could name.
 - `GET /sme/webhooks?kind=money|downtime|all` (default `all`): `money` hides the Razorpay
   `payment.downtime.*` notices (~99.5% of prod rows); rows carry `isDowntime`. Render
   downtime as one provider-health line, not as rows.
@@ -267,7 +270,7 @@ GET /sme/analytics/purchase-funnel/users?step=paywall_viewed|upgrade_tapped|chec
   "note": "One row per person: …"
 }
 ```
-*(from DTO — replace after staging deploy; values from the staging run.)*
+*(Captured from staging over HTTP 2026-11-03: `GET /sme/analytics/purchase-funnel/users?step=failed&includeInternal=1&days=90&limit=1` → 200, `total: 3`, `window.from` `2026-08-05T18:30:00.000Z` (IST midnight 90 days back), `window.to` = the request instant; `displayName` masked.)*
 
 `total` = the funnel's `people[step]` for the same query (staging: 24/24 step × scope
 checks equal). `kind`: `APPLE`, `RAZORPAY_ONE_TIME`, `UPI_AUTOPAY_MANDATE`, `RAZORPAY`
@@ -276,8 +279,9 @@ links to `/app-users/:userId`.
 
 ### B1.7 What the portal lane P1 must do (checklist)
 
-1. Profile: render `paymentAttempts[]` as the Money block; drop the "Payment webhooks" tile
-   until the prod backfill has run.
+1. Profile: render `paymentAttempts[]` as the Money block. (The "drop the Payment webhooks
+   tile until the prod backfill has run" condition has expired: the prod backfill ran
+   2026-11-03 evening, see B1.4.)
 2. `/transactions`: send IST dates as bare `YYYY-MM-DD` (already does); add an Attempts tab
    on `/sme/payment-attempts`; label `isComp` / `isSandbox` / `isInternal` rows; webhooks
    default `kind=money` + a downtime line from `kind=downtime&limit=1` → `total`.
@@ -293,7 +297,7 @@ links to `/app-users/:userId`.
 
 ## §B4 — Keyless parity (backend lane B4, 2026-11-03)
 
-> Status: committed on branch `lane/b4` (not yet on `main`), NOT deployed. Shapes are from code + jest; only the edit-log SQL was run (read-only) on staging.
+> Status: merged on `main` (B4 commits `46f344e`…`9f6d0d0`) and LIVE on staging and production (`upsc:165`, 2026-11-03). Shapes are from code + jest; only the edit-log SQL was run (read-only) on staging during the lane.
 
 Owner ruling 2026-11-03: every keyless route the portal calls (`/cms/*`, `/content-doc-admin`,
 `/reels`, `/videos/*`) gets a **keyed `/sme/*` twin with its functionality replicated end to
@@ -364,8 +368,8 @@ portal sending one.
 `language` (strict), PYQ `correctAnswer` (one uppercase A–E, or null with `boardDeleted`),
 `year` (1950 … next year; a blank Excel Year arrives as 0) — writes the rows that pass in one
 transaction and returns `{ count, created, rejected, results: [{index, status, id, error}] }`.
-⚠️ **Contract change for callers of the keyed bulk** (the portal proxies it but does not use
-it yet): it was all-or-nothing returning `{count}`. Every row rejected → `400` with the row
+⚠️ **Contract change for callers of the keyed bulk** (portal lane P5, `98d11fa` / v2.50.0,
+moves the Excel import onto it): it was all-or-nothing returning `{count}`. Every row rejected → `400` with the row
 errors as `message`. `GET /sme/content/{pyq,mains}` take `?language=`. `/cms/*/bulk` unchanged.
 
 ### What the portal lane (P5) has to do
@@ -378,10 +382,10 @@ the confirmation phrase on Delete-All (or remove the button).
 
 ## §B3 — Users-list + control contracts (backend lane B3, 2026-11-03)
 
-Branch `lane/b3` (commits B3.1 → B3.7). Nothing here is deployed yet: every staging proof
-below was run **read-only** (the real Prisma builders / service methods against the staging
-database, compared with hand SQL); the HTTP-level checks are listed in §B3.8 for after the
-owner's staging deploy. No migration, no new table.
+Branch `lane/b3` (commits B3.1 → B3.7), merged on `main` and LIVE on staging and production
+(`upsc:165`, 2026-11-03). The staging proofs below were run **read-only** during the lane (the
+real Prisma builders / service methods against the staging database, compared with hand SQL);
+the HTTP-level checks are in §B3.8. No migration, no new table.
 
 ### B3.0 Rules that apply to everything below
 
@@ -500,6 +504,10 @@ hand SQL.
 
 ### B3.8 To verify after the staging deploy (HTTP)
 
+*Staging is deployed. Run 2026-11-03 (GET only, B7): `GET /sme/users?access=paid&limit=1` →
+200, `total: 1`, `examDefaulted: true`. The two writes below were NOT run by B7 (read-only
+lane).*
+
 - `PATCH /sme/notification-rules/settings` with the GET body and `enabled` toggled → 200,
   `GET` reflects it, one `NOTIFICATION_SETTINGS_UPDATE` audit row; toggle back.
 - `POST /sme/exams/upsc-cse/plans {"planId":"annual","strikePriceInPaise":<stored>}` → 200,
@@ -514,10 +522,12 @@ hand SQL.
 ## §B6 — Follow-ups surfaced by the portal lanes (backend lane B6, 2026-11-03)
 
 Commits on `main` (in order): B6.1 — none (BLOCKED, see below) · B6.2 `b637832` ·
-B6.3 `49703b6` · B6.4 `a890bda` · B6.5 (this doc). **Committed, NOT deployed.** No
-migration, no new table. Staging proofs below were run **read-only** (the real service
-methods / their rendered SQL against the staging database, compared with hand SQL); the
-HTTP checks are in §B6.6 for after the owner's staging deploy.
+B6.3 `49703b6` · B6.4 `a890bda` · B6.5 (this doc). **LIVE on staging and production** (ECS
+roll 19:27 IST, 2026-11-03; probed 15/15, AUDIT_2026-11.md §8). No migration, no new table.
+Staging proofs below were run **read-only** during the lane (the real service methods / their
+rendered SQL against the staging database, compared with hand SQL); the HTTP checks are in
+§B6.6. **B6.1 correction (§8):** the empty staging rollup is `API_USAGE_ROLLUP_ENABLED=false`
+in the staging env on purpose (its purge deletes rows) — an env decision, not a defect.
 
 ### B6.1 Usage maintenance jobs — BLOCKED (the stated cause is not in the code)
 
@@ -620,6 +630,12 @@ every scope × cohort — no exam 5 / 0 / 10, `upsc-cse` 2 / 0 / 11, `appsc-grou
 
 ### B6.6 To verify after the staging deploy (HTTP)
 
+*Run on staging over HTTP 2026-11-03 (B7, GET only) — all as stated below: `platform=none&includeInternal=1`
+→ `total: 10`; `platform=IOS` → 400; `segment/count?segment=premium` →
+`{"matchedUsers":5,"segment":"premium","exam":null,"examDefaulted":false}`; `&exam=appsc-grp-1` →
+400 `Unknown exam "appsc-grp-1"…`; `signups` with bare days and with `+05:30` instants →
+identical bodies; `startDate=yesterday` → 400. The users-row vs snapshot comparison was not run.*
+
 - `GET /sme/analytics/users?days=30&search=<a staging user>` → the row's
   `sessions`/`minutesInApp` = `GET /sme/users/:id/snapshot?days=30` `timeInApp.sessions`/`minutes`
   (both trailing 30 days from now; the snapshot takes only `days`). Call them back to back —
@@ -630,3 +646,63 @@ every scope × cohort — no exam 5 / 0 / 10, `upsc-cse` 2 / 0 / 11, `appsc-grou
   `?platform=IOS` → 400.
 - `GET /sme/notifications/segment/count?segment=premium` → `{ "matchedUsers": 5, "segment":
   "premium", "exam": null, "examDefaulted": false }`; `&exam=appsc-grp-1` → 400.
+
+---
+
+## §B7 — Simulation usage + language; docs ledger fixes (backend lane B7, 2026-11-03)
+
+Branch **`lane/b7`** (based on `main` `6c9c67a`): B7.1 `0d038fa` · B7.2 `90718eb` · B7.3 `9e2b8f9`
+· B7.4 (this section). **Committed on the branch, NOT merged, NOT deployed.** No migration,
+no new table. Proofs: specs + the REAL controllers/services run read-only against the
+staging database with `ts-node` (the route is not deployed, so there is no HTTP capture).
+
+### B7.1 `attempts: { started, submitted }` on simulation rows (owner ruling D35)
+
+`GET /sme/content/simulations` rows and `GET /sme/content/simulations/:id` gain:
+
+```json
+"attempts": { "started": 1, "submitted": 1 }
+```
+
+- **Source:** `simulation_attempts` (written by the app's `SimulationService.startAttempt` /
+  `submitAttempt`). `started` = rows whose `startedAt` is in the window; `submitted` = of
+  those, `submittedAt IS NOT NULL` (manual or timer auto-submit). One attempt per user per
+  test, so `started` is also people.
+- **Window:** new query `startDate` / `endDate` — IST days via the shared `istDateRange`
+  (bare day = whole IST day; ISO instant literal; bad/inverted → 400 before any read).
+  **Default = all time.** The window filters the COUNTS, never the rows.
+- **Audience:** internal accounts excluded by default; `includeInternal=1` opts in (B1 rule).
+- Always present, `{0, 0}` when nobody started the test. One grouped query per page.
+- `?exam=` keeps its meaning (which tests are listed).
+- ⚠️ Both routes now validate their query through a DTO (`forbidNonWhitelisted`): the list
+  accepts `exam`, `language`, `startDate`, `endDate`, `includeInternal`; `:id` accepts
+  `startDate`, `endDate`, `includeInternal`. **Any other key is now a 400** (before B7 the list
+  silently ignored unknown keys). The portal sends only `exam` today.
+- `/cms/simulations` is unchanged (no `attempts`); the keyless parity suite pins the one
+  addition.
+
+Staging (real controller, `includeInternal=1`, window `2026-10-28..2026-10-29`): Simulations
+01–04 → `{1,1}`, the rest `{0,0}` = hand SQL. Default (internal excluded): every row `{0,0}` —
+all 9 staging attempts are by internal accounts. Example row: SME_CONTENT_INGEST_API.md §3.7.
+
+### B7.2 `?language=` on `GET /sme/content/simulations` (ledger CL13)
+
+Same precedence as `/sme/content/{pyq,mains}`: **query wins over `X-Lang`**; absent → the
+header; neither → every language; unknown code → 400 before the list is read. Staging (real
+controller): `language=hi` → 3 rows, `language=en` → 7 rows (= `SELECT language, count(*)
+FROM simulations`: en 7, hi 3); `language=hi` with `X-Lang: en` → only `hi` rows.
+
+### B7.3 Docs: every stale sentence from the 2026-11-03 ledger
+
+25 docs corrected against the code (ledger parts A1, A2, B, C, D1, D2, W). This file's own
+statuses now say B1–B4 and B6 are live; the three B1 JSON examples were re-captured from
+`staging-api` over HTTP and matched; the §B3.8 / §B6.6 GET checks were run on staging.
+
+### B7.4 What the portal lane P5.5 does with it
+
+1. Simulations list: render "N started · M finished" from `attempts.started` /
+   `attempts.submitted` per row; pass the page's window as bare IST days
+   (`startDate`/`endDate`) and `includeInternal=1` only behind the "include team accounts"
+   toggle. Say "all time" when no window is sent.
+2. Language filter: send `?language=<code>` instead of filtering the full list locally.
+3. Do not send any other query key to these two routes (400).

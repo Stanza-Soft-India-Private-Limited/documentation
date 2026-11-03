@@ -30,13 +30,19 @@ two levels come from completely different places.
 | `TAP` | iOS only | **Inferred** | An `upgrade_tapped` / `checkout_opened` client event with `gateway = apple`. |
 | `BOTH` | — | Certain | The same user did both. |
 
-A user is counted at their **furthest** stage: someone who viewed *and* ordered is `ORDER`,
-not `VIEW`. So the four signals partition the audience — they never double-count.
+A user is counted at their **furthest** stage — **within one response**: someone who viewed
+*and* ordered is `ORDER`, not `VIEW`, when the request asked for both. The label is computed
+only from the signals the request asked for, so `signal=view` labels that same person `VIEW`,
+and `signal=all` does **not** include views at all (it is order + tap). Separate calls
+therefore overlap: never add counts from two filtered calls — fetch `all` + `view` once and
+dedupe by `userId`, keeping the furthest stage.
 
 ⚠️ **`VIEW` is deploy-forward.** Capture began 2026-08-20, when the paywall resolver started
 stamping the campaign code onto the usage row. There is **no history before that date** — a
-window that opens earlier under-reports views, and only views. Every other signal is complete
-for the full campaign history.
+window that opens earlier under-reports views. **Retention also binds:** `VIEW` reads raw
+`api_usage`, purged after **30 days**, and `TAP` reads `auth_events`, purged after **90 days**
+(`api-usage-rollup.service.ts`). Only `ORDER` (the `orders` table) is complete for the full
+campaign history.
 
 **Why iOS is different, and why we cannot fix it.** Apple writes no order until a transaction
 *completes*. An iOS user who taps Join, sees the StoreKit sheet and backs out leaves **no order
@@ -63,7 +69,7 @@ x-api-key: <API_KEY_SECRET>
 
 | Param | Default | Notes |
 |---|---|---|
-| `signal` | `all` | `all` · `view` · `order` (certain only) · `tap` (inferred only) |
+| `signal` | `all` | `all` (= order + tap, **no views**) · `view` · `order` · `tap`. ⚠️ These **re-label, they do not subset**: a person who both ordered and tapped is `BOTH` under `all` but is returned by `order` AND by `tap`, labelled as asked. Partition ONE response locally |
 | `from` | campaign start | ISO lower bound. **Clamped to the campaign window — a wider value cannot widen it**, so a number from this endpoint always describes this campaign. |
 | `to` | campaign end | ISO upper bound. Clamped the same way. |
 | `minAppVersion` | `1.8` | Dotted-numeric floor applied to the **iOS TAP signal only**. Pass `0` to disable. |
@@ -212,9 +218,12 @@ there is no order, so there is no amount. Render a dash, never ₹0.
 A row is dropped if **any** of these hold. All of them are intentional; do not ask for them to be
 relaxed without reading why.
 
-- **The user converted.** Premium is currently active, *or* they have a PAID order any time after the
-  campaign started — by any route, including a later standard-price purchase. Chasing someone who
-  already paid is worse than having no list.
+- **The user converted — in the CAMPAIGN'S exam** (lane B1.3), one reason each, in this precedence:
+  `paidAfterwards` (a non-MANUAL, non-sandbox PAID order for that exam since the campaign started —
+  by any route, including a later standard-price purchase), `compedByStaff` (a MANUAL PAID order for
+  that exam since the start), `holdsExam` (a live, un-revoked entitlement in that exam). Premium in
+  another exam does not exclude anyone. Chasing someone who already paid is worse than having no
+  list. Each reason is counted in the response's `excluded{}`.
 - **The order was already granted** (`premium_granted_at` set) or is `PAID`.
 - **It is an iOS sandbox order** (`is_test = true`). TestFlight/StoreKit tests hit the production
   backend by design and manufacture real-looking orders; they are not real intent.
@@ -232,8 +241,10 @@ Read this section before promising a funnel chart to anyone.
 1. ~~"Viewed the offer screen but never tapped" does not exist.~~ **Solved 2026-08-20** — this is now
    the `VIEW` signal and `funnel.viewedNotJoined`. The resolver stamps the campaign it matched onto
    the usage row, so a view is server-observed on every platform. ⚠️ **Deploy-forward: there is no
-   history before 2026-08-20**, and it cannot be backfilled — the code was never stored. For anything
-   earlier, Mailchimp's click report is the only surviving record.
+   history before 2026-08-20**, and it cannot be backfilled — the code was never stored. And raw
+   `api_usage` is **purged after 30 days**, so today any window older than 30 days reads 0 views —
+   that, not the 2026-08-20 start, is now the binding limit. For anything earlier, Mailchimp's
+   click report is the only surviving record.
 2. **`platform` is best-effort and partly retroactive.** It is the user's most recent
    `api_usage.platform`, which comes from the `x-platform` header. **prepmonkey-web did not send that
    header until 2026-08-16**, so web activity before then reads as `null`, not `"web"`. For the
@@ -266,7 +277,9 @@ campaign and none of them match. From the live FREEDOM15 window:
 
 **Always say which unit you are showing.** "17 orders from 9 users, 7 still worth chasing" is
 honest; "17" beside "7" with no bridge reads as a bug. The 9 → 7 gap is §4 doing its job — surface
-it as "2 excluded (already converted)", never as an unexplained drop.
+it from the response's per-reason `excluded{internal, paidAfterwards, compedByStaff, holdsExam}`
+("1 paid later · 1 comped by staff"), never as an unexplained drop and never as one "already
+converted" bucket (on FREEDOM15 that bucket was 4 staff comps — nobody had paid).
 
 ---
 
@@ -370,8 +383,9 @@ Payment row.
 
 - **No new table, no new column, no migration.** Pure read over `orders`, `auth_events`, `user_auth`
   and `api_usage`.
-- One query: two CTEs (`ord`, `tap`) → `FULL OUTER JOIN` on user id → exclusions → window-function
-  `totalCount` so pagination costs one scan, not two.
+- Two queries over the same candidate set: three CTEs (`ord`, `tap`, `vw`) → `FULL OUTER JOIN` on
+  user id → per-reason exclusions → window-function `totalCount` for the page, plus one count of
+  the `excluded{}` reasons.
 - Code: `src/modules/sme/services/sme-offer.service.ts` (`abandoned`),
   `src/modules/sme/dto/sme-offer.dto.ts`, `src/modules/sme/controllers/sme-offer.controller.ts`.
 - The web `X-Platform: web` header was added in `prepmonkey-web/src/lib/api.ts` at the same time and

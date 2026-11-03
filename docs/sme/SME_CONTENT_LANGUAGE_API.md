@@ -30,9 +30,11 @@ endpoints, the SME team builds the UI.
 > language control is ONE dropdown fed by `GET /sme/i18n/languages` — on every content form
 > and every copy editor — not a free-text box.
 
-> **Production prerequisite.** Production does not have `i18n_languages` yet (the UI
-> localization rollout, [SME_LOCALIZATION_API.md](./SME_LOCALIZATION_API.md), has to land
-> there first). Until then this surface exists on **staging only**.
+> **Production status.** Production has `i18n_languages` and content `language` since
+> `upsc:164` (rolled 2026-11-03 14:13 IST with migrations `20261023000000_i18n` +
+> `20261030000000_content_lang`, verified via `information_schema`); `en` and `hi` were
+> seeded, published and enabled there the same evening (AUDIT_2026-11.md header and §8).
+> This surface is live on staging AND production.
 
 ---
 
@@ -56,7 +58,7 @@ response"; the key is on every content ROW a response returns, never on aggregat
 
 | Carries `language` | Where |
 |---|---|
-| SME rows | every row of `GET /sme/content/pyq`, `/mains`, `/simulations`, `GET /content-doc-admin`, and every create/PATCH response (the full row) |
+| SME rows | every row of `GET /sme/content/pyq`, `/mains`, `/simulations`, `GET /content-doc-admin`, the keyed twins `GET /sme/content/docs`, `GET /sme/reels`, `GET /sme/content/psychometric/test-sets` (lane B4), and every create/PATCH response (the full row) |
 | App list rows | `GET /pyq`, `GET /mains`, `GET /content-doc`, `GET /reels/feed` (the reel's tag — the feed itself is shared, not language-filtered), `GET /psychometric/test-sets`, `GET /simulations` items, `GET /pyq/mock-test` items |
 | App by-id reads | `GET /pyq/:id`, `GET /pyq/:id/details` and `/reveal` (as `question.language`), `GET /mains/:id`, `GET /content-doc/:id` |
 
@@ -90,8 +92,9 @@ no `X-Served-Lang`. `/reels/bookmarks`, `GET /reels/:id` and the reels-drop noti
 count are language-blind too. Set `language` on a reel (`PUT /reels/bulk`, §1.2) to record
 what language it is in: every feed row carries it, the reel's blog inherits it (write the
 blog in the reel's language), and the coverage script (§6) counts by it — but the tag never
-decides who sees the reel. No reel list filters by language
-(`GET /reels`, `GET /sme/blog`).
+decides who sees the reel. The keyless `GET /reels` does not filter by language; the keyed
+`GET /sme/reels?language=<code>` does (lane B4.4; unknown code → 400). Blogs
+(`GET /sme/blogs`) have no language filter.
 
 **Allowed languages = any row of `i18n_languages`**, enabled or not, published or not — so
 content can be loaded before a language goes live. The app only offers languages that are
@@ -221,9 +224,10 @@ The same body with `"language": "xx"` — HTTP **400**, nothing written:
 With the legacy name `"language": "HINDI"` — HTTP **400**, the same message naming the value as
 sent: `Unknown language "HINDI". Use a code from GET /sme/i18n/languages …`.
 
-**Bulk is all-or-nothing:** every item's `language` is checked before the first write; one
-bad item refuses the whole batch. Every write is audited as `CONTENT_INGEST` with the
-language (a bulk write lists every language in the batch).
+**Bulk is per row** (since lane B4.6): each item's `language` is checked on its own; a bad
+item is listed in `results[]` (`items[i]: Unknown language …`) and the valid rows are
+written. Only when EVERY row fails is the response a 400. Every write is audited as
+`CONTENT_INGEST` with the language (a bulk write lists every language it wrote).
 
 Simulation questions (`POST /sme/content/simulations/questions/bulk`) carry no language of
 their own. **Guidance, not enforced:** link a simulation only to questions in its own
@@ -246,6 +250,10 @@ script in existence calls them):
 Covers `/cms/pyq` (+ bulk), `/cms/mains` (+ bulk), `/cms/simulations`,
 `/cms/psychometric/test-sets` (create/update), `/content-doc-admin` (create/update — the
 create used to hard-code `"ENGLISH"`), and `PUT /reels/bulk` (`videos[].language`).
+Their KEYED twins are **STRICT** like §1.1 (an unknown code or `"ENGLISH"` → 400; absent →
+`en` on a create, left unchanged on an update and on reels bulk):
+`/sme/content/docs` (create/PATCH), `PUT /sme/reels/bulk`, and
+`/sme/content/psychometric/test-sets` (create/PATCH) — lane B4.
 Reels uploaded through the Mux upload routes are `en`; re-tag them with the bulk update. A
 reel's `language` is a tag only — it does not move the reel in or out of anyone's feed (§0).
 
@@ -261,8 +269,12 @@ another language (without `--lang`, a file that mixes languages is refused).
 ## 2. Listing and filtering by language (SME)
 
 `GET /sme/content/pyq`, `GET /sme/content/mains`, `GET /sme/content/simulations` and
-`GET /content-doc-admin` read the **`X-Lang` header** (there is no `?lang=` query parameter —
-the global validation would 400 it):
+`GET /content-doc-admin` read the **`X-Lang` header**. The keyed lists ALSO take a
+**`?language=<code>` query that wins over the header** (the portal's proxies cannot forward
+headers): `/sme/content/pyq` and `/mains` (lane B4.6), `/sme/content/simulations` (lane
+B7.2) and `/sme/content/docs`; `/sme/reels` and `/sme/content/psychometric/test-sets` take
+the query only (no header). `?lang=` is not a parameter (the global validation 400s it), and `/content-doc-admin`
+stays header-only:
 
 | `X-Lang` | Rows |
 |---|---|

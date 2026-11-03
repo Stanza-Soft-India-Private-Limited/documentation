@@ -32,8 +32,9 @@ POST /sme/users/:id/trial-extension
 >
 > So an extension is a grant to the **person** and applies in every exam, while the end
 > it **stacks on** is computed from the policy of the user's `activeExamId` (`upsc-cse`
-> when they have never picked one). **Nothing here is 14 days by contract** — 14 is
-> merely `upsc-cse`'s current length. Do not hard-code it in the portal; read `trialDays`
+> when they have never picked one). **Nothing here is a fixed number of days by contract**
+> — `upsc-cse` was 14 days until 2026-09-25 and is **3 days** for signups since
+> (SME_EXAMS_API §4); `appsc-group-1` is 0. Do not hard-code it in the portal; read `trialDays`
 > off the response (below) or `trialExamId` off the user row.
 
 **Semantics:**

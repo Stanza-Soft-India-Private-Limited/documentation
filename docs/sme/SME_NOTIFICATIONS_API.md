@@ -15,8 +15,10 @@ the SME team builds the UI.
 
 - Missing/invalid key → **401** `{ "message": "Invalid or missing API key" }`.
 - All routes use the `/api/v1/` global prefix.
-- These are the **audited** wrappers (every send is written to `sme_audit_log`). Prefer
-  them over the raw `/notifications/send*` endpoints.
+- Prefer these wrappers over the raw `/notifications/send*` endpoints. ⚠️ Only the
+  **per-user** send (`POST /sme/users/:id/notify`) writes an `sme_audit_log` row
+  (`USER_NOTIFY`); **broadcast and segment sends write no audit row** (every send still
+  lands in the in-app feed, see "Persistence").
 
 ---
 
@@ -60,7 +62,7 @@ Content-Type: application/json
 | Field | Req | Notes |
 |---|---|---|
 | title | ✅ | ≤ 120 chars |
-| body | ✅ | the message |
+| body | ✅ | the message, ≤ 500 chars (longer is a **400**) |
 | type | ➖ | deep-link type for tap routing (see §4). Default `home` |
 | id | ➖ | entity id forwarded in the payload (used by some `type`s) |
 | params | ➖ | extra deep-link arguments for the few `type`s that need more than an id — flat `{"key":"value"}` object, see §4.1 |
@@ -227,9 +229,10 @@ x-api-key: <API_KEY_SECRET>
 > containing `trial_ends_at > now`, which is NULL for a NULL column, so every ACTIVE user past
 > their trial was in **no** cohort. Both fixed.
 
-The three cohorts are **person-level**: they read the `user_auth` mirror, so "premium"
-means *holds premium somewhere*, not *holds premium in this exam*. `exam` is the other
-axis — see below.
+The cohorts are evaluated **per exam when `exam` is sent**: `premium` = a live entitlement
+in THAT exam, `trial` = inside that exam's trial window — never from the `user_auth`
+mirror. Without `exam`, `premium` = a live entitlement in any exam. `exam` ALSO narrows who
+is addressed by `active_exam_id` — see below.
 
 **Response 200**
 <!-- shape verified against code @c0a8fe5 — NOT captured on staging, see note -->
@@ -283,8 +286,9 @@ staging, 2026-09-21 (backend `f6329e6`):
 }
 ```
 
-- Matching is on **`user_profiles.active_exam_id`** — who the person *is* (their last
-  switcher / picker choice), not what they hold.
+- The audience is narrowed on **`user_profiles.active_exam_id`** — who the person *is*
+  (their last switcher / picker choice) — AND the cohort is then evaluated in that exam
+  (`premium` = live entitlement in `exam`, `trial` = that exam's trial window).
 - ⚠️ **`exam: "upsc-cse"` also matches every user who has never touched the picker or
   the switcher** (`active_exam_id` NULL, or no profile row at all). An unset preference
   means UPSC, and without that rule a UPSC-scoped send would reach almost nobody. Same
@@ -375,7 +379,10 @@ list needs *which subject*). Those take a **`params`** object alongside `type`:
 - **≤ 10 keys**, key ≤ 40 chars, value ≤ 256 chars, **≤ 1 KB** serialized.
   (FCM's tightest data limit is 2 KB on a *topic* send, and `title`/`body`/`type`/`id`
   already spend part of it. Over the cap → **400**, with the offending field named.)
-- **Optional everywhere.** Omit it and every `type` behaves exactly as it always has.
+- **Optional everywhere.** Omit it and every `type` behaves exactly as it always has —
+  except that an **exam-scoped broadcast or segment send stamps `params.exam`** (the
+  slug) even when you send no `params`, and that stamped value overwrites an `exam` key
+  you sent (`withExamParam`, `src/modules/notifications/notification-exam.util.ts`).
 - Unknown keys are ignored by the app; a missing *required* param degrades to the
   fallback in the table below (never an error screen).
 - The universal-link equivalent is the **query string**:
@@ -599,7 +606,8 @@ on *who* belongs to an exam.
   quietly send to nobody any more.
 - **`exam` is the "who they ARE" axis** (`active_exam_id`), not "what they HOLD"
   (`user_exam_entitlements`). `exam: "upsc-cse"` additionally matches every user with no
-  stored preference; the tier cohorts stay person-level.
+  stored preference; the tier cohorts are then evaluated in that exam (live entitlement /
+  that exam's trial).
 - **A scoped `premium`/`trial` send before 2026-09-21 targeted the wrong cohort** (§3.1)
   — treat any `matchedUsers` recorded from one as meaningless.
 - **iOS foreground:** notification-type messages are not auto-shown while the app is in
@@ -610,8 +618,10 @@ on *who* belongs to an exam.
   per-user/segment; `topic_notifications` for broadcast) so users see missed ones.
 - **Amounts/rupees** etc. are irrelevant here (no money in this module).
 - **`params` is additive:** omitting it reproduces the exact payload sent before it
-  existed, and app builds that predate it ignore the key rather than failing.
-- **Auditing:** per-user + segment sends are recorded in `sme_audit_log` (`USER_NOTIFY`).
+  existed — **except on exam-scoped broadcast / segment sends, which add `params.exam`** —
+  and app builds that predate it ignore the key rather than failing.
+- **Auditing:** only per-user sends are recorded in `sme_audit_log` (`USER_NOTIFY`);
+  broadcast and segment sends are not audited.
 
 ---
 

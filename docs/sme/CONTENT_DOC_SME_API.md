@@ -98,9 +98,10 @@ is never re-checked or re-defaulted. `*` is skipped (it is not a catalogue entry
 tripwire, **never a rejection** — content-doc admin is an existing script surface and has to
 keep working, so the row is written with the bad tag either way.
 
-Unlike PYQ / Mains / Simulations, there is **no key-gated mirror of this route** that makes
-`examIds` mandatory — `/sme/content/*` covers the three question banks only
-([SME_CONTENT_INGEST_API.md](./SME_CONTENT_INGEST_API.md) §7).
+The key-gated mirror that makes `examIds` mandatory is **`/sme/content/docs`** (lane B4.3,
+`SmeContentDocController`; see the keyed section below and
+[SME_CONTENT_INGEST_API.md](./SME_CONTENT_INGEST_API.md) §10.3). This keyless route stays
+lenient.
 
 ---
 
@@ -384,7 +385,7 @@ Send `status` only when you mean to change it.
 | Status | Cause | Fix |
 |--------|-------|-----|
 | 400 | Missing required field | Include `title`, `subject`, `topic`, `rawMarkdown` |
-| 400 | Duplicate slug | Change the title slightly (slug is auto-generated) |
+| 400 | Duplicate slug | Only when you set `slug` explicitly on a keyed `PATCH /sme/content/docs/:id` and it is taken (`Unique constraint violation`). The auto-generated slug is the title plus a base-36 timestamp, so a create without `slug` never collides |
 | 400 | `Unknown exam "<slug>". Create it via POST /sme/exams first.` | Only from **`?exam=`** on the list call. A bad slug in a create/update **body** never 400s — it is stored verbatim (if well-formed, now with a server WARN) or dropped to `["upsc-cse"]` (if malformed) |
 | 404 | Invalid document ID | Check the UUID is correct |
 
