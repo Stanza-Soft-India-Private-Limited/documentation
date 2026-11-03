@@ -2,6 +2,7 @@
 
 > Changed 2026-09-21 — stale-text pass (telemetry live in 2.0, version ladder, links). Exam-dimension changes follow in [WHAT_CHANGED_2026-09-21.md](./WHAT_CHANGED_2026-09-21.md).
 > Changed 2026-09-21 — ?exam= on every analytics route, examCoverage, purchase-funnel (see [WHAT_CHANGED_2026-09-21.md](./WHAT_CHANGED_2026-09-21.md)).
+> Changed 2026-11-03 — `/summary` excludes internal accounts by default (`includeInternal`) and gains a per-exam `money` block; purchase-funnel reworked (see [WHAT_CHANGED_2026-11.md §B1](./WHAT_CHANGED_2026-11.md#b1--money-truth-contract-backend-lane-b1-2026-11-03) and [SME_INSIGHTS_API.md §5.1](./SME_INSIGHTS_API.md)).
 
 Dedicated read-only endpoints for the SME portal to render **Daily Active Users** and
 **per-user / per-feature engagement**. Server-to-server, same model as the rest of the SME
@@ -143,7 +144,15 @@ content's tags, so one `*`-tagged document counts for every exam and the per-exa
 ## 1. Core
 
 ### `GET /sme/analytics/summary`
-`{ engagedDau24h, engagedWau7d, engagedMau30d, activeDau24h, activeMau30d, stickiness }` — `stickiness = engagedDau24h / engagedMau30d`.
+`{ engagedDau24h, engagedWau7d, engagedMau30d, activeDau24h, activeMau30d, stickiness, includeInternal, money }` — `stickiness = engagedDau24h / engagedMau30d`.
+
+**2026-11 (B1):** every figure EXCLUDES internal accounts by default (staff domains, store
+demo logins, sandbox testers; `includeInternal=1` opts in, echoed as `includeInternal`).
+`money` is the server-side money headline — all-time, **per exam** (`exam` / `examDefaulted`
+headline + `byExam[]` + `allExams`), real money only (no MANUAL comps, no sandbox; captured
+INR), with `comps`, `sandboxOrders`, `nonInrOrders` and `appleEvents { production,
+sandbox, unknown }` beside it. Field list and the portal cards it replaces:
+[WHAT_CHANGED_2026-11.md §B1](./WHAT_CHANGED_2026-11.md#b1--money-truth-contract-backend-lane-b1-2026-11-03).
 `?exam=` — **MIXED source**: the `engaged*` trio splits on the PERSON (full history), the `active*` pair on `api_usage.exam_id` (deploy-forward). The object gains a **top-level `examCoverage`** (not a wrapper), computed over the widest window it reports on (MAU = 30d). So `engagedMau30d` and `activeMau30d` are **not** comparable per-exam until `examCoverage.since` is 30 days old.
 
 ### `GET /sme/analytics/dau?days=30`

@@ -6,6 +6,7 @@
 > Changed 2026-10-30 — optional `language` on every PYQ / Mains / Simulation write (STRICT here: an unknown code, or `"ENGLISH"`, is a 400) and the `X-Lang` header as an exact language filter on the three lists — see [SME_CONTENT_LANGUAGE_API.md](./SME_CONTENT_LANGUAGE_API.md) §1–§2.
 > Changed 2026-10-30 — optional `marks` (integer 1–50) on `POST mains`, `mains/bulk` items and `PATCH mains/:id`; omitted = default 10 / untouched — **§3.5**.
 > Changed 2026-10-30 — the app's `GET /simulations` no longer lists an active simulation with 0 assigned questions — **§3.6**.
+> Changed 2026-11-03 (lane B4, keyless parity) — **`pyq/bulk` and `mains/bulk` validate PER ROW** (response now `{count, created, rejected, results[]}`, §3.2/§4); `?language=` on the PYQ/Mains lists; and keyed twins of every keyless content route the portal calls: GET-by-id + **soft, attributed DELETE** for pyq/mains/simulations, the simulations `externalId` lookup, `/sme/content/psychometric/*`, `/sme/content/docs`, `/sme/reels`, `/sme/blogs?reelId=` and the content edit log `GET /sme/content/edits` — **§10**. See [WHAT_CHANGED_2026-11.md](./WHAT_CHANGED_2026-11.md) §B4.
 
 The ingest surface the SME portal should call. Same three question banks as `/cms/*`
 (PYQ · Mains · Simulations), behind `x-api-key`, with **`examIds` required on every
@@ -218,16 +219,23 @@ upload there has no actor to record.
 | Method | Route | `examIds` | Notes |
 |---|---|---|---|
 | `POST` | `/sme/content/pyq` | **required** | Create one PYQ |
-| `POST` | `/sme/content/pyq/bulk` | **required per item** | 1–100, all-or-nothing |
+| `POST` | `/sme/content/pyq/bulk` | **required per item** | 1–100, **validated per row** (§4) |
 | `PATCH` | `/sme/content/pyq/:id` | optional, validated when present | Merge |
-| `GET` | `/sme/content/pyq` | — | Paginated list, `?exam=` |
+| `GET` | `/sme/content/pyq` | — | Paginated list, `?exam=`, `?language=` |
+| `GET` | `/sme/content/pyq/:id` | — | One row (inactive included) — §10.1 |
+| `DELETE` | `/sme/content/pyq/:id` | — | **Soft** + attributed — §10.1 |
 | `POST` | `/sme/content/mains` | **required** | Create one Mains question |
-| `POST` | `/sme/content/mains/bulk` | **required per item** | 1–100, all-or-nothing |
+| `POST` | `/sme/content/mains/bulk` | **required per item** | 1–100, **validated per row** (§4) |
 | `PATCH` | `/sme/content/mains/:id` | optional, validated when present | Merge |
-| `GET` | `/sme/content/mains` | — | Paginated list, `?exam=` |
+| `GET` | `/sme/content/mains` | — | Paginated list, `?exam=`, `?language=` |
+| `GET` | `/sme/content/mains/:id` | — | One row — §10.1 |
+| `DELETE` | `/sme/content/mains/:id` | — | **Soft** + attributed — §10.1 |
 | `POST` | `/sme/content/simulations` | **required** | Create a mock test (the container) |
 | `PATCH` | `/sme/content/simulations/:id` | optional, validated when present | Merge |
 | `GET` | `/sme/content/simulations` | — | All simulations incl. inactive, `?exam=` |
+| `GET` | `/sme/content/simulations/:id` | — | One simulation — §10.1 |
+| `DELETE` | `/sme/content/simulations/:id` | — | Deactivate + attributed — §10.1 |
+| `GET` | `/sme/content/simulations/questions` | — | `?externalIds=a,b` → `[{id, externalId}]` — §10.1 |
 | `POST` | `/sme/content/simulations/questions/bulk` | **none — by design** | 1–500, skips duplicate `externalId` |
 | `POST` | `/sme/content/simulations/:id/assign-questions` | **none — by design** | Replaces the list, sets `totalQuestions` |
 
@@ -385,12 +393,24 @@ curl -X POST {{BASE_URL}}/api/v1/sme/content/pyq/bulk \
   }'
 ```
 
-**Response `201`:**
+**Response `201`** (per-row since 2026-11-03; shape from code + `sme-content-ingest.bulk.spec.ts`, not a staging capture):
 
 ```jsonc
-// <!-- shape verified against code @bfae389 — bulk create was NOT run on staging, see note -->
-{ "count": 2 }
+{
+  "count": 2,            // rows written (kept for old callers)
+  "created": 2,
+  "rejected": 0,
+  "results": [
+    { "index": 0, "status": "created", "id": "3f0c…", "error": null },
+    { "index": 1, "status": "created", "id": "9a71…", "error": null }
+  ]
+}
 ```
+
+A rejected row looks like
+`{ "index": 3, "status": "rejected", "id": null, "error": "items[3]: correctAnswer must be a single option letter A–E, or null for a question the board deleted (got \"c\")." }`.
+If **every** row is rejected the call is a `400` whose `message` is the array of those
+row errors, and nothing is written.
 
 > ℹ️ **Not captured.** A single smoke row was created on staging for §3.1 (and is still
 > there); a *bulk* run would have written up to 100 more rows into a shared content bank
@@ -890,21 +910,31 @@ out. They are not deleted — they go back to being unassigned bank rows.
 
 ## 4. Bulk semantics
 
-Three rules, and the third is the one that matters operationally:
+Changed 2026-11-03 (lane B4.6, audit K4) — **per-row**, no longer all-or-nothing:
 
 1. **1–100 items** per `pyq/bulk` / `mains/bulk` request. (Simulation *questions* are
    1–500, §3.8.) Over the cap is a `400` from the validation pipe.
-2. **Per-item `examIds`.** Each item carries its own; a mixed-exam batch is legal.
-3. **All-or-nothing, and the exam check runs FIRST.** Every item's `examIds` is resolved
-   before `bulkCreate` is called at all, so a batch with one bad slug in item 73 writes
-   **nothing** — you never have to work out which half of a 100-row dump landed. Past that
-   gate, the insert itself is a single Prisma transaction, so a database-level failure is
-   also all-or-nothing.
+2. **Per-item `examIds` + `language`.** Each item carries its own; a mixed-exam batch is
+   legal. `examIds` is required and every slug must exist; `language` is strict (§0 of
+   [SME_CONTENT_LANGUAGE_API.md](./SME_CONTENT_LANGUAGE_API.md)).
+3. **Each row is judged on its own.** Checked per row: `examIds`, `language`, the PYQ
+   answer key (§9.2 — one uppercase A–E letter, or `null` with `boardDeleted: true`) and
+   `year` (an integer from 1950 to next year — a blank Excel Year cell used to arrive as
+   `0`). The rows that pass are written in **one** transaction with their ids assigned up
+   front, so `results[i].id` is the stored row; the rows that fail are listed with an
+   `items[i]: …` sentence. **Check `rejected` — a `201` can carry rejected rows.**
+4. **Every row rejected → `400`**, `message` = the list of row errors, nothing written.
+5. A **malformed body** (a missing `question`, a bad enum, `marks` out of 1–50) is still the
+   validation pipe's whole-request `400` naming `items.<i>.<field>` — that is a broken call,
+   not a bad row.
 
-The audit row for a bulk records the **union** of the exams touched:
+`/cms/{pyq,mains}/bulk` is unchanged: all-or-nothing and lenient.
+
+The audit row for a bulk records the **union** of the exams and languages written and how
+many rows were rejected:
 
 ```jsonc
-{ "route": "POST /sme/content/mains/bulk", "count": 100, "examIds": ["appsc-group-1", "*"] }
+{ "route": "POST /sme/content/mains/bulk", "count": 98, "examIds": ["appsc-group-1", "*"], "languages": ["en"], "rejected": 2 }
 ```
 
 ---
@@ -962,16 +992,16 @@ of the same doc.
 
 ## 7. What this surface does NOT mirror
 
-Deliberately — these have no exam dimension to get wrong, so there was nothing to gate:
+Changed 2026-11-03 (lane B4) — **everything the portal calls is now mirrored** (§10). What is
+still keyless-only, on purpose:
 
-| Not here | Keep using |
+| Keyless only | Why |
 |---|---|
-| Delete a question or a simulation | `DELETE /cms/pyq/:id`, `DELETE /cms/mains/:id`, `DELETE /cms/simulations/:id` |
-| Fetch one question by id | `GET /cms/pyq/:id`, `GET /cms/mains/:id` |
-| Resolve `externalId` → UUID after a bulk insert | `GET /cms/simulations/questions?externalIds=…` |
-| Psychometric questions and test sets | `/cms/psychometric/*` — psychometric content carries **no `examIds`** at all; an exam opts out of the test with the `psychometric` feature flag instead ([SME_EXAMS_API.md](./SME_EXAMS_API.md) §7) |
-| Library study documents | `/content-doc-admin` ([CONTENT_DOC_SME_API.md](./CONTENT_DOC_SME_API.md)) — already exam-aware, `examIds` optional |
-| Reels | `PUT /reels/bulk` — `examIds` per video |
+| `DELETE /reels` (every reel) | No keyed delete-all, deliberately. The keyless route now needs the body `{"confirm":"DELETE ALL REELS"}` (else `400`) and is logged as `REELS_DELETE_ALL`. |
+| `POST /videos/upload` (multipart) | Not called by the portal; the tus flow (`/sme/reels/upload-url`) is mirrored |
+| `/reel-blog-admin/*` | Superseded by `/sme/blogs` — retire, no parity |
+| `POST /content-doc-admin/reparse-all` | A one-off repair script, not a portal action |
+| `POST /reels/:id/like` | Called by the portal, **does not exist on our side** (404) — drop the button |
 
 ---
 
@@ -986,6 +1016,8 @@ Deliberately — these have no exam dimension to get wrong, so there was nothing
 | `400` | array of validator strings | An ordinary field-level validation failure from the global pipe — note the shape difference from the two `examIds` 400s above |
 | `400` | `correctAnswer is required unless boardDeleted is true — only a question the board deleted may have no answer.` | A live PYQ needs one letter (§9.2). On bulk the message is prefixed `items[<i>]: ` |
 | `400` | `correctAnswer must be a single option letter A–E, or null for a question the board deleted (got "3").` | Send the **letter**, uppercase, not the option number (§9.2) |
+| `400` | `items[<i>]: year must be a real exam year between 1950 and <next year> (got 0).` | A bulk row's `year` is missing/0 — it is listed in `results[]`, the other rows still land (§4) |
+| `400` | `actor and reason are required: send {"actor": "<who is deleting>", "reason": "<why>"} in the body.` | Any keyed DELETE (§10.1) |
 | `401` | — | Missing or wrong `x-api-key` |
 | `404` | `<Resource> not found` | The `:id` does not exist |
 
@@ -1126,3 +1158,111 @@ The same two-step presigned upload as campaign artwork
 **Errors:** `400` unsupported `contentType` or unknown `folder` · `503` object storage not
 configured on that environment. Upload **per environment**: a staging URL must never be
 stored on a production row.
+
+---
+
+## 10. Keyed twins of the keyless routes (2026-11-03, lane B4)
+
+Owner ruling 2026-11-03: every keyless route the portal calls (`/cms/*`, `/content-doc-admin`,
+`/reels`, `/videos/*`) gets a keyed `/sme/*` twin with the same functionality end to end;
+the keyless routes stay. "≡" below = same status, rows and error body on the same input,
+pinned by `src/modules/sme/sme-keyless-parity.spec.ts` (one fixture, both route families,
+the real services). Shapes in this section are from code + that suite, **not** staging
+captures (nothing in lane B4 was deployed).
+
+### 10.1 PYQ / Mains / Simulations — by id, lookup, DELETE
+
+| Keyless | Keyed | |
+|---|---|---|
+| `GET /cms/pyq/:id`, `GET /cms/mains/:id` | `GET /sme/content/pyq/:id`, `…/mains/:id` | ≡ (same service; inactive rows returned with `isActive:false`; non-UUID → 400; unknown → 404 `PYQ paper with ID <id> not found`) |
+| — (portal derived it from the list) | `GET /sme/content/simulations/:id` | the list row; 404 `Simulation <id> not found` |
+| `GET /cms/simulations/questions?externalIds=` | `GET /sme/content/simulations/questions?externalIds=` | ≡ — matches only, order not guaranteed |
+| `DELETE /cms/pyq/:id`, `/cms/mains/:id` (**hard**) | `DELETE /sme/content/pyq/:id`, `…/mains/:id` | **soft** — see below |
+| `DELETE /cms/simulations/:id` (soft) | `DELETE /sme/content/simulations/:id` | soft, plus the audit row |
+
+**Keyed DELETE (every bank: pyq, mains, simulations, psychometric questions + test sets, docs, reels).**
+Body (required — the x-api-key is shared, so the key identifies nobody; `actor` is recorded, never trusted):
+
+```json
+{ "actor": "editor@stanzasoft.ai", "reason": "Duplicate of 2019 Q42", "note": "optional", "reportId": "optional" }
+```
+
+Response `200`:
+
+```json
+{ "message": "PYQ paper deactivated", "id": "…", "bank": "pyq", "isActive": false, "alreadyInactive": false, "auditId": "…" }
+```
+
+- The row is **hidden, never removed**: `isActive=false` (reels: `status: "DELETE"`, the
+  existing hidden state — the Mux asset and the blog are kept). Every learner read already
+  filters it out; `pyq_attempts` / `mains_evaluations` (no FK) keep resolving.
+- In the **same transaction** a `CONTENT_DELETE` row is written to `sme_audit_log`:
+  `actorNote` = reason, `before` = the full row, `after` = `{route, bank, id, actor, reason, note, reportId, isActive:false, alreadyInactive}`.
+  Either both land or neither does.
+- Deleting an already-hidden row is a `200` with `alreadyInactive: true` (and is logged).
+- Restore: simulations `PATCH {isActive:true}`, psychometric question/test set `PATCH {isActive:true}`,
+  reels `PATCH /sme/reels/:id {status:"READY"}`. PYQ/Mains/docs have no `isActive` on their
+  PATCH DTOs — a restore there is an owner/SQL action today.
+
+### 10.2 Psychometric — `/sme/content/psychometric/*`
+
+All 11 `/cms/psychometric/*` routes under the same suffixes: `questions` (POST, `bulk`, GET
+list, GET/PATCH/DELETE `:id`) and `test-sets` (POST, GET list, GET/PATCH/DELETE `:id`). Same
+service, filters (`subject, topic, psychometricType, difficulty, search, isActive,
+isVerified, page, limit`), `{data, meta}` and 404 sentences (≡). Differences: writes are
+audited; DELETEs are soft + attributed (the keyless ones are hard); test-set `language` is
+strict; the test-set list honours `isActive`, `search` (name) and `language` (the keyless
+list ignores them). **No `examIds`, no question `language`** — the columns do not exist
+(a 400 if sent). The learner `GET /psychometric/test-sets/:id/questions` now skips inactive
+questions, so a soft delete removes a question from tests.
+
+### 10.3 Content documents — `/sme/content/docs`
+
+See [CONTENT_DOC_SME_API.md](./CONTENT_DOC_SME_API.md) — create (examIds required), list
+(+ `?language=`), `by-source/:sourceId`, `:id`, PATCH (+ explicit `slug`), `:id/reparse`,
+DELETE. The re-sync no longer deletes quiz questions (learners' answers survive).
+
+### 10.4 Reels — `/sme/reels`
+
+| Keyless | Keyed | |
+|---|---|---|
+| `GET /reels` (behind `@Feature('reels')`) | `GET /sme/reels` | ≡ (+ `?exam=`, `?language=`; no feature gate) |
+| `PUT /reels/bulk` | `PUT /sme/reels/bulk` | same upsert + `{success, data, count}`; `examIds`/`language` strict when sent |
+| `POST /videos/upload-url` | `POST /sme/reels/upload-url` | same Mux call + PREPARING row; `{success, data:{uploadId, uploadUrl}}` |
+| `GET /videos/:id/status` | `GET /sme/reels/:id/video-status` | ≡ `{success, data:{status, assetId, playbackId, error}}` (no UUID pipe: reel ids may be cuids) |
+| — | `GET /sme/reels/:id` | the row (any status) + `hasBlog` |
+| — | `PATCH /sme/reels/:id` | merge: title, description, subject, context, date, status, examIds, language |
+| `DELETE /reels/:id` (hard, deletes the Mux asset + blog) | `DELETE /sme/reels/:id` | soft (`status: DELETE`), attributed |
+| `DELETE /reels` (every reel) | **none, on purpose** | keyless now needs `{"confirm":"DELETE ALL REELS"}` |
+
+`GET /sme/blogs` also takes `reelId=a,b,c` (≤ 100): exactly those reels with `hasBlog` — load
+the blog state of the reels on screen instead of the newest 100 (audit K6: 387 of 487 blogs
+were drawn as "No blog").
+
+### 10.5 Content edit log — `GET /sme/content/edits`
+
+Our side of the portal's `/content-edits`. The log is `sme_audit_log` (no new table), rows
+with action `CONTENT_INGEST` (every keyed create/bulk/patch — no actor), `CONTENT_DELETE`
+(keyed deletes — actor + reason), `REELS_DELETE_ALL`, `BLOG_CREATE/UPDATE/DELETE`.
+
+Query: `from`, `to` (IST calendar days `YYYY-MM-DD`, inclusive; default the last 30 IST days),
+`bank` (`pyq | mains | simulations | psychometric-questions | psychometric-test-sets | docs | reels | blogs`),
+`actor` (case-insensitive exact), `action`, `page`, `limit` (≤ 100). Newest first.
+
+```jsonc
+{
+  "data": [
+    { "id": "…", "at": "2026-11-03T06:00:00.000Z", "action": "CONTENT_DELETE", "bank": "pyq",
+      "route": "DELETE /sme/content/pyq/:id", "contentId": "…", "actor": "editor@stanzasoft.ai",
+      "reason": "duplicate", "note": null, "reportId": null, "examIds": null, "count": null }
+  ],
+  "meta": { "total": 1, "page": 1, "limit": 10, "totalPages": 1, "hasNext": false, "hasPrev": false },
+  "window": { "from": "2026-10-05", "to": "2026-11-03", "timezone": "Asia/Kolkata" }
+}
+```
+
+Every row key is always present (`null` when the writer did not record it). `GET
+/sme/content/edits/:id` adds the full `before` / `after` JSON. Rows written before 2026-11-03
+have no `bank` key; it is derived from the action (blogs) or the `/sme/content/<bank>` route.
+Edits (PATCH/create) carry **no actor** — attributing them needs the portal to send one on
+writes, which is an open owner decision (audit S08 §A.4 last row).

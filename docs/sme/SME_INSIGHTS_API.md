@@ -3,6 +3,7 @@
 > Changed 2026-09-21 — stale-text pass (telemetry live in 2.0, version ladder, links). Exam-dimension changes follow in [WHAT_CHANGED_2026-09-21.md](./WHAT_CHANGED_2026-09-21.md).
 > Changed 2026-09-21 — exam-safe ingest: /sme/content/* + examIds on /cms and content-doc (see [WHAT_CHANGED_2026-09-21.md](./WHAT_CHANGED_2026-09-21.md)).
 > Changed 2026-09-21 — ?exam= on every analytics route, examCoverage, purchase-funnel (see [WHAT_CHANGED_2026-09-21.md](./WHAT_CHANGED_2026-09-21.md)).
+> Changed 2026-11-03 — purchase-funnel: first payments only (renewals/comps split out), `people` (distinct per window), per-exam paid side, upsc-cse default, from/to, internal excluded, and the per-step people list `GET /sme/analytics/purchase-funnel/users` (see §5.1 and [WHAT_CHANGED_2026-11.md §B1](./WHAT_CHANGED_2026-11.md#b1--money-truth-contract-backend-lane-b1-2026-11-03)).
 
 > ## ⛔ BEFORE YOU WRITE ANY UI CODE — INVOKE THE `frontend-design` SKILL
 > If you are a Claude/coding session building screens on these endpoints, your **first
@@ -1291,6 +1292,53 @@ why it exists, and the three ways it will be misread.
 ordersPaid`, plus `conversionPct`, a `totals` block and a top-level `caveats: string[]`
 (this is the one endpoint here with no `meta` wrapper). `days` is **1..90**, default 30 —
 `auth_events` is purged at 90, so a longer window would lose its own tail.
+
+### 5.1 Changes 2026-11-03 (lane B1) — read before the rest of §5
+
+The narrative below predates these; where they disagree, this subsection wins.
+
+- **`ordersPaid` = FIRST real payments only.** Staff comps (`payment_source = MANUAL`) and
+  renewals (a later Apple charge of the same original transaction; UPI AutoPay cycle ≥ 2)
+  are no longer in it — they are reported beside it as `renewals` and `comps` (per day
+  and in `totals`). Sandbox and internal accounts are excluded. On prod (S06 E9) this
+  moves the 30-day "Paid 28" to ~11 and the conversion from 2.3% to ~0.9%.
+- **`people`** `{ paywallViewed, upgradeTapped, checkoutOpened, checkoutAbandoned,
+  purchaseFailed, paid, conversionPct }` = each person once over the whole window. The
+  existing per-day sums stay in `series`/`totals`; `peopleNote` says why they differ.
+  **Tiles should show `people`.**
+- **Per exam, never account-wide** (owner ruling). `exam` is always a slug; omitted →
+  `upsc-cse` with `examDefaulted: true` (person axis via `sme-exam-scope.util.ts`: NULL
+  active exam ≡ upsc-cse; order axis `orders.exam_id` exact). `byExam[]` = the paid side
+  `{ examId, ordersPaid, renewals, comps, paidPeople }` of every exam (NULL = unresolved
+  Apple product), `allExams` = across exams.
+- **Window**: `from` + `to` (YYYY-MM-DD, IST days, `to` inclusive, ≤ 90 days, both or
+  neither) override `days`; response `window: { from, to }` (`to` exclusive).
+- **Internal accounts excluded** unless `includeInternal=1` (echoed).
+- Labels to fix on the page: "Purchase failed" = *our server refused to start the
+  purchase* (every row so far was the removed 15-minute "already active" block), not
+  "the payment itself failed"; "Checkout abandoned" = *left the payment sheet, no reason
+  captured* — not "pricing / friction".
+
+#### `GET /sme/analytics/purchase-funnel/users` — who is behind a step
+
+```
+GET /sme/analytics/purchase-funnel/users?step=paywall_viewed|upgrade_tapped|checkout_opened|paid|abandoned|failed&days=&from=&to=&exam=&includeInternal=&page=&limit=
+```
+`step` required; `limit` default 50 (max 200). Same scope and predicates as the funnel, so
+`total` equals `people[step]` for the same query (verified on staging for every step ×
+4 scopes). Body: `{ step, window: { from, to, days, exam, examDefaulted, includeInternal },
+data: [{ userId, displayName, kind, at, examId, isInternal }], total, page, limit, hasMore,
+note }` — one row per person (latest occurrence), newest first.
+
+| Field | Source |
+|---|---|
+| `kind` | paid: order source (`APPLE`; Razorpay receipt `sub_…` → `UPI_AUTOPAY_MANDATE`, else `RAZORPAY_ONE_TIME`). Events: `metadata.gateway` — `apple` → `APPLE`; `razorpay` → `UPI_AUTOPAY_MANDATE` when the event says `create_subscription_failed` or a mandate was created within an hour, `RAZORPAY_ONE_TIME` when a one-time order was, else `RAZORPAY` (rail not recorded). `null` when nothing was picked (every paywall view). |
+| `at` | the person's latest event / first-payment time in the window |
+| `examId` | paid: `orders.exam_id`. Events: the Apple product's `exam_plans` row, else the mandate's exam, else the person's stored active exam; `null` = not recorded (never guessed) |
+| `displayName` | `user_auth.name`, else the email |
+
+Retention: the five event steps are client-emitted (app 2.0+) and purged at 90 days;
+`paid` is permanent. Example body: [WHAT_CHANGED_2026-11.md §B1.6](./WHAT_CHANGED_2026-11.md).
 
 ### Why it is its own endpoint, and not another metric on `/summary`
 

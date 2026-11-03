@@ -185,6 +185,17 @@ Applies to **every** rule, on top of whatever its trigger already selected.
 
 Omit a key to not filter on it. `{}` means "no narrowing".
 
+**Clearing a filter (2026-11, AUDIT C4).** On `PATCH` the audience is merged **per key**:
+an omitted key keeps its stored value, a key sent as **`null`** (or a list sent as **`[]`**)
+**removes** that filter, and `"audience": null` resets to "no narrowing". Before this, a
+cleared field that the portal dropped from the body kept the old value while the toast
+said "Rule updated" — send the explicit `null`.
+
+```jsonc
+PATCH /sme/notification-rules/:id
+{ "audience": { "activeWithinDays": null, "tiers": [] } }   // both filters removed, others kept
+```
+
 ⚠️ **Tier here is the accurate definition** — `premium` = paid and current, `trial` = entitled
 but never paid, `free` = everything else. This deliberately differs from the FCM *topic*
 `tier_premium`, which counts trial users as premium. The topic definition has always been the
@@ -215,7 +226,12 @@ today none do. Do not set it expecting it to stop a daily rule firing daily.
 
 **`priority`** (lower wins) only matters when the per-user daily cap has to choose between two
 rules competing for the same user on the same day. It does not affect send order or timing.
-Seeded as PAYMENT 10, STREAK 20, everything else 50.
+Seeded as PAYMENT 10, STREAK 20, everything else 50 (a NEW rule defaults to 100).
+
+**Blank is not "clear" for these two (2026-11, AUDIT C8).** Both columns are NOT NULL, so on
+`PATCH` a `null` `cooldownDays` or `priority` is a **400** — it used to pass validation and
+500 in the database. Omit the key to keep the stored value. Ranges: cooldown 0–365,
+priority 0–1000 (a negative value is a 400).
 
 ## 5. CRUD
 
@@ -367,8 +383,21 @@ PATCH /sme/notification-rules/settings
 - **`shadowMode: true`** — forces even *enabled* rules to shadow. The emergency freeze; you do
   not need it for a careful rollout, because disabled rules are shadow-run anyway.
 - **`quietHours`** — no non-transactional sends inside this IST window. Wraps midnight.
-- **`maxPerUserPerDay`** — **clamped server-side to 0–5.** A value outside that is corrected,
-  not obeyed.
+- **`maxPerUserPerDay`** — 0–5. **A value outside that is a 400** (the DTO rejects it; an
+  older version of this line said "corrected" — only a bad *stored* blob is clamped on read).
+- **`priority`** — the category order the daily cap uses. **Read-only:** `PATCH` accepts the
+  key and **ignores** it (never validated, never stored).
+
+**`PATCH` is a partial update**: send any subset of `enabled`, `shadowMode`, `quietHours`,
+`maxPerUserPerDay`; omitted or `null` fields are left alone.
+
+> 🔴 **Fixed 2026-11 (AUDIT C1): the guardrails Save and the kill switch had never worked.**
+> The portal's Guardrails panel posts the `GET` object back — `priority` included — and the
+> DTO did not declare `priority`, so `forbidNonWhitelisted` 400'd every save
+> ("property priority should not exist"). Production had never stored a settings change
+> (`notification_config` NULL, 0 `NOTIFICATION_SETTINGS_UPDATE` audit rows). The example
+> body above (the `GET` shape) is now a valid `PATCH` body; the kill switch is
+> `{ ...GET body, "enabled": false }` or just `{ "enabled": false }`.
 
 Transactional rules bypass quiet hours, the cap and the opt-out.
 
@@ -397,9 +426,16 @@ line, deliberately, because it must be visible to whoever is watching the deploy
 ## 8. Did it work?
 
 ```
-GET /sme/notification-rules/:id/runs?limit=20
-GET /sme/notification-rules/:id/analytics?days=30
+GET /sme/notification-rules/:id/runs?limit=20&from=&to=
+GET /sme/notification-rules/:id/analytics?days=30&from=&to=
 ```
+
+**Windows (2026-11, D23).** `from`/`to` take an **IST date** (`YYYY-MM-DD`; `to` covers the
+whole IST day — the bound is the next IST midnight, exclusive — so `from=to=D` is exactly day
+D) or an ISO instant (literal, `to` inclusive). On `runs` they filter `ran_at`; `limit` is
+1–100 (out of range is now a 400, was silently clamped). On `analytics` they **win over
+`days`**; `days` is 1–365 (was uncapped on our side). `notification_dispatch` and
+`notification_rule_run` are permanent tables, so any window is fully backed.
 
 A run row exists for **every** execution, including shadow runs that sent nothing — mode,
 counts, the suppression breakdown, a rendered sample, and `error` if the rule failed.
@@ -408,8 +444,15 @@ counts, the suppression breakdown, a rendered sample, and `error` if the rule fa
 > and `skippedReason` on the run row first.
 
 ```json
-{ "windowDays": 30, "sent": 3120, "tapped": 412, "tapRate": 13.2 }
+{ "windowDays": 30, "from": "2026-10-04T09:15:20.721Z", "to": null,
+  "sent": 3120, "tapped": 412, "tapRate": 13.2 }
 ```
+`from`/`to` are always present (2026-11): the instants actually counted; `to: null` = up to
+now. (Example from the DTO; the staging capture for rule 27bc6804 with `from=to=2026-10-30`
+returned `{"windowDays":1,"from":"2026-10-29T18:30:00.000Z","to":"2026-10-30T18:30:00.000Z","sent":1,...}`.)
+
+> ⚠️ `tapped` is structurally 0 today: no app build calls `POST /notifications/tapped`
+> (AUDIT_2026-11 U3). Show "opens not measured" rather than a 0 % tap rate.
 
 ⚠️ **`tapped` means the user actually opened the notification.** It is not the same as
 `isRead` on `/sme/analytics/notifications`, which only means they opened the in-app feed at

@@ -2,6 +2,7 @@
 
 > Changed 2026-09-21 — exam dimension on users, orders, offers, banners; two BREAKING calls (see [WHAT_CHANGED_2026-09-21.md](./WHAT_CHANGED_2026-09-21.md)).
 > Changed 2026-09-21 — per-exam broadcast, validated segment exam (+ fix), survey targetExams, feedback ?exam= (see [WHAT_CHANGED_2026-09-21.md](./WHAT_CHANGED_2026-09-21.md)).
+> Changed 2026-11-03 — lane B1 "money truth": internal accounts excluded by default (`includeInternal`), `isInternal` / `isComp` / `isSandbox` row flags, IST calendar-day date filters, payment attempts (incl. UPI AutoPay mandates), per-exam money (see [WHAT_CHANGED_2026-11.md §B1](./WHAT_CHANGED_2026-11.md#b1--money-truth-contract-backend-lane-b1-2026-11-03)).
 
 End-to-end reference for the **SME portal** to manage the PrepMonkey app's users,
 transactions, blogs, and notifications. This is the management/admin surface of the
@@ -22,6 +23,19 @@ x-api-key: <API_KEY_SECRET>
   to a premium grant is in **paise** (matches how the app stores prices).
 - Pagination: list endpoints take `page` (default 1) + `limit` (default 20, max 100)
   and return `{ data, total, page, limit, hasMore }`.
+- **Internal accounts (2026-11, B1).** `/sme/users`, `/sme/transactions`, `/sme/orders`,
+  `/sme/webhooks` and `/sme/payment-attempts` EXCLUDE internal accounts from rows and
+  `total` by default: emails at stanzasoft.com / stanzasoft.ai / prepmonkey.com /
+  prepmonkey.ai / designasylum.in, the store-review demo phone logins, and owners of an App
+  Store sandbox order. `includeInternal=1` includes them; every row carries `isInternal`.
+  A single user's page (`/sme/users/:id`, `/snapshot`) is never filtered.
+- **Dates (2026-11, B1).** `startDate`/`endDate` (and `from`/`to`) given as `YYYY-MM-DD`
+  are **IST calendar days**: start inclusive from 00:00 IST, end = the whole day.
+  `startDate = endDate` is one day. A full ISO timestamp is taken literally; garbage → 400.
+- **No account-wide "premium" (2026-11 ruling).** Paid / comped / revenue figures are per
+  exam; account-level `isPremium` / `premiumState` / `premiumExpiresAt` /
+  `status=SUBSCRIBED` / trial describe the **UPSC-CSE** exam (legacy default; also matches
+  users with no active exam). Per-exam truth is `entitlements[]`.
 
 ---
 
@@ -33,18 +47,78 @@ grant/revoke premium, extend a free trial, and notify.
 
 ### 1.1 List users
 ```
-GET /sme/users?page=1&limit=20&search=&status=&exam=&premium=&onboarded=&platform=
+GET /sme/users?page=1&limit=20&search=&status=&exam=&access=&language=&createdFrom=&createdTo=&onboarded=&platform=
 ```
+> **2026-11 (lane B3) — the filter model is Exam → Access → Language** (AUDIT_2026-11 §5B
+> ruling b; owner ruling 2026-11-03: the account-wide word "premium" is retired).
+> `access=` is the one access axis and is **always exam-scoped**; `premium=` and
+> `premiumState=` stay accepted as **LEGACY** (account-wide, UPSC-era state) — use
+> `access=` + `exam=` instead.
 | Query | Type | Description |
 |---|---|---|
 | page | number | default 1 |
 | limit | number | default 20, max 100 |
 | search | string | matches email / username / name / phone (case-insensitive) |
-| status | enum | ACTIVE, INACTIVE, SUSPENDED, LOCKED, SUBSCRIBED, UNSUBSCRIBED |
+| status | enum | ACTIVE, INACTIVE, SUSPENDED, LOCKED, **ONBOARDING** (2026-11), SUBSCRIBED, UNSUBSCRIBED. A stale lifecycle mirror — for access use `access=`; keep `status=SUSPENDED` as the "deactivated" modifier. |
 | **exam** | slug | Filter by the user's **active exam mode** (`user_profiles.active_exam_id`). `exam=upsc-cse` **also matches users who have never picked an exam** (`active_exam_id` NULL) — the same rule push segments use, and the only reason the default exam returns anybody. **400 on an unknown slug**, never a silently empty page. |
-| premium | boolean | `true` = currently premium. **Without `exam`:** the person-level mirror (`user_auth` SUBSCRIBED and not expired) — unchanged. **With `exam`:** a live, un-revoked `user_exam_entitlements` row for **that** exam (NULL expiry = perpetual), i.e. "has actually bought THIS exam". |
+| **access** | enum | `paid` \| `comped` \| `not_onboarded` \| `trial` \| `lapsed` \| `trial_over` — see **§1.1a**. What the person **holds in `exam`**, over every user whatever exam they have selected (with `access`, `exam` does not apply the selected-exam rule above). **Without `exam` it is evaluated against `upsc-cse`** and the response says `examDefaulted: true`. 400 on any other value. |
+| **language** | string | `user_profiles.ui_language`, exact code (`hi`, `ta`, `pt-br`; lower-cased). `none` = never chosen (NULL or no profile) — NOT coerced to English: NULL means the device language. |
+| **createdFrom** / **createdTo** | date | Joined between. A bare `YYYY-MM-DD` is an **IST day**: `createdFrom` from that day's IST midnight (inclusive), `createdTo` through the end of that IST day (bound = next IST midnight, exclusive), so `createdFrom=createdTo=D` is exactly day D. An ISO datetime is used as an inclusive instant. 400 on an impossible date (`2026-02-31`) or when from is after to. Removes the portal's 163-call full scan for "Joined". |
+| premium | boolean | **LEGACY** (account-wide, UPSC-era). `true` = currently premium. **Without `exam`:** the person-level mirror (`user_auth` SUBSCRIBED and not expired). **With `exam`:** a live, un-revoked `user_exam_entitlements` row for **that** exam (NULL expiry = perpetual). `false` (2026-11) is the exact complement — until then it was **silently ignored**. Prefer `access=`. |
+| premiumState | enum | **LEGACY** (2026-11; was a 400). `Premium` \| `Trial` \| `Trial Ended` \| `Churned` \| `Downloaded` — returns exactly the rows whose `premiumState` shows that label (same derivation, person-level trial length). Prefer `access=` + `exam=`. |
 | onboarded | boolean | filter by onboarding completion |
 | platform | enum | `ios` \| `android` \| `web` (has an active device token) |
+
+#### 1.1a The Access axis (`access=`, 2026-11)
+
+Every user of the scope is in **exactly one** value (the six counts add up to the list
+total; proven on staging):
+
+| Value | Meaning (scope = `exam`'s rows and trial, or `upsc-cse` when no exam is sent; over every user) |
+|---|---|
+| `paid` | holds a **live** entitlement whose source is not MANUAL (APPLE / RAZORPAY) |
+| `comped` | holds a live **MANUAL** entitlement and no live paid one (staff comp) |
+| `not_onboarded` | never finished onboarding (no profile, or `onboarding_completed = false`) and holds nothing live |
+| `trial` | onboarded, holds nothing live, and is **inside the free-trial window** |
+| `lapsed` | onboarded, has entitlement rows but none live, not in the trial window |
+| `trial_over` | onboarded, never held an entitlement, not in the trial window — includes "this exam has no trial" (0-day exams) |
+
+- **live** = `revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now)`.
+- **in the trial window** = the gate's own rule: status ACTIVE or SUBSCRIBED (a purchase
+  in one exam does not end the trial in another) AND now < trial end, where an SME-set
+  `trial_ends_at` wins, else `created_at` + **`exam`'s** trial length (`exams.trial_policy`
+  entry in force at signup; an exam not in the catalogue = 14 days).
+- **It is the HOLDING, not the selection (B3.1c, coordinator ruling).** With `access=`,
+  `exam` means "in this exam" for every user — the selected-exam rule (`active_exam_id`,
+  NULL ≡ upsc-cse) is **not** applied. An APPSC buyer browsing in UPSC mode is in
+  `exam=appsc-group-1&access=paid` (likewise `comped` / `lapsed`). The six values therefore
+  partition the **whole** user base once per exam, and each row's `access[]` line for that
+  exam carries the same state. The plain list **without** `access=` keeps the
+  selected-exam rule, unchanged.
+- **Backfill-stable (owner rule 2026-11-03).** The axis reads `user_exam_entitlements` +
+  `active_exam_id` + the trial clock only. The user_auth mirror (`status=SUBSCRIBED`,
+  `premium_expires_at`, `subscription_source`) enters through ONE mapping: a SUBSCRIBED
+  user with **no entitlement row in any exam** reads as holding one virtual `upsc-cse`
+  row (`source = COALESCE(subscription_source,'MANUAL')`, `expires_at =
+  premium_expires_at`) — the shape the 2026-09-08 migration wrote. A later backfill that
+  writes exactly that row (same predicate) changes no answer.
+
+**Response additions (2026-11):** the list body always carries `examDefaulted`
+(boolean — `true` only when `access` was sent without `exam`), and **every row** carries
+`access[]` — one line per active exam (plus any exam the user holds a row in):
+```json
+"access": [
+  { "examId": "upsc-cse", "state": "trial", "until": "2026-11-06T09:12:00.000Z", "source": null },
+  { "examId": "appsc-group-1", "state": "paid", "until": "2027-11-03T00:00:00.000Z", "source": "APPLE" }
+]
+```
+`state` uses the `access=` vocabulary (same precedence, same legacy mapping, the trial
+evaluated with **that** exam's length). `until`: paid/comped = when that access ends
+(null = perpetual); trial = trial end; lapsed = when the last entitlement ended;
+trial_over = when the trial ended (the signup instant on a 0-day exam); not_onboarded =
+null. `source`: the entitlement source for paid/comped/lapsed, else null.
+`isPremium` / `premiumState` remain on the row for compatibility — they are the
+account-wide legacy view.
 
 > **Exam is two axes here, and they answer different questions.** `exam=` alone filters
 > on who the user **is** (`active_exam_id`). `exam=` + `premium=true` filters on what
@@ -219,7 +293,16 @@ are `null` for every other state (premium, trial ended, churned, never onboarded
 **The window length is per exam** (`trialExamId` names which exam decided it), so do
 not hard-code 14 anywhere in the portal.
 
+> **`isInternal`** (2026-11) is on every row. Internal rows are hidden unless
+> `includeInternal=1` — a support search for a staff account needs it.
+
 ### 1.2 Get a user
+
+> **2026-11:** also returns `isInternal` and **`paymentAttempts[]`** — the newest 20 payment
+> attempts on every rail (Apple, Razorpay one-time, UPI AutoPay **mandate** from
+> `subscriptions`, staff COMP), same row shape as §2.5. `recentOrders` is unchanged but
+> cannot see a mandate that was never charged; render the Money block from
+> `paymentAttempts`.
 ```
 GET /sme/users/:id
 ```
@@ -325,7 +408,10 @@ PATCH /sme/users/:id
 { "name": "New Name", "status": "ACTIVE" }
 ```
 Both fields optional. `status` ∈ ACTIVE, INACTIVE, SUSPENDED, LOCKED, SUBSCRIBED,
-UNSUBSCRIBED. Phone, email and role are read-only. Returns the updated user summary —
+UNSUBSCRIBED, and **ONBOARDING only unchanged** (2026-11): the portal's edit modal resends
+the row's status with every name change, so an ONBOARDING user's name edit used to 400;
+it now succeeds, while moving anyone INTO ONBOARDING is a 400 ("status ONBOARDING cannot
+be set by SME"). Phone, email and role are read-only. Returns the updated user summary —
 **the same shape as a §1.1 list row**, `activeExamId` / `trialExamId` / `entitlements[]`
 included and freshly loaded. A name correction never blanks out what the user holds.
 
@@ -490,9 +576,15 @@ GET /sme/transactions?page=1&limit=20&userId=&paymentStatus=&source=&exam=&start
 | source | RAZORPAY, APPLE, MANUAL (filters by the parent order's source) |
 | userId | payments for one user |
 | **exam** | Filters on the **parent order's** `exam_id`, exactly as `userId`/`source`/`isTest` already do. Pass a slug, or the literal **`none`** to select payments whose order has **no** exam (the `UNRESOLVED_EXAM` cases, §2.3). **400 on an unknown slug.** |
-| startDate / endDate | ISO date bounds on `createdAt` |
+| startDate / endDate | `YYYY-MM-DD` = IST calendar days (end day fully included); ISO timestamp taken literally |
 | search | razorpay payment id / payer email / user email |
-| includeTest | `true` to include App Store **sandbox** purchases. Default **false** — see the note under §2.3. |
+| includeTest | `true` to include App Store **sandbox** purchases. Default **false** — see the note under §2.3. (`false` now really parses as false.) |
+| includeInternal | `1`/`true` to include internal accounts (default excluded) |
+
+**2026-11 row flags** (every row, always present): `isInternal`, `isComp` (parent order is a
+MANUAL staff grant — listed, **not money**; its amount is the notional list price),
+`isSandbox` (parent order `is_test`). Money totals must exclude `isComp` and `isSandbox`
+rows — or better, read `GET /sme/analytics/summary` → `money` (computed server-side).
 
 **Response 200:**
 <!-- captured from staging 2026-09-21, backend f6329e6 -->
@@ -685,8 +777,15 @@ path, and it is already labelled `isTest`.
 
 ### 2.4 Webhook / provider events
 ```
-GET /sme/webhooks?page=&limit=&source=&startDate=&endDate=&search=
+GET /sme/webhooks?page=&limit=&source=&startDate=&endDate=&search=&kind=&includeInternal=
 ```
+
+**2026-11 (B1.4):** `kind=money|downtime|all` (default `all`) — `money` hides the Razorpay
+`payment.downtime.*` gateway notices (~99.5% of rows), `downtime` shows only them. New row
+fields: `isDowntime`, `isSandbox` (Apple: decoded JWS environment), `isComp` (always
+false), `isInternal`. Events are now linked to `userId`/`orderId` at ingest where the
+payload allows (older rows: `scripts/backfill-payment-event-links.ts`, owner runs it on
+prod), so `examId` and the per-user webhook count stop being empty for everyone.
 Provider event ledger from `payment_events` — **Razorpay webhooks + Apple App Store
 notifications**. Filter `source=RAZORPAY|APPLE` (omit for both; `MANUAL` = empty). Keeps
 the original keys (`eventId`, `eventType`, `source`, `payload`, `processedAt`) and adds
@@ -706,6 +805,32 @@ matched has no resolved exam. That null is the honest answer, not a gap.
 > empty list. It now returns real events — **additive/non-breaking** (same keys, plus new
 > ones). Full Apple detail (notification types, lifecycle, field reference) is in
 > [SME_APPLE_IAP_API.md](./SME_APPLE_IAP_API.md).
+
+---
+
+### 2.5 Payment attempts — `GET /sme/payment-attempts` (2026-11, B1.2)
+```
+GET /sme/payment-attempts?page=&limit=&userId=&exam=&kind=&status=&from=&to=&search=&includeInternal=
+```
+One row per attempt to pay, newest first: every order (Apple, Razorpay one-time, MANUAL
+comp) **plus every Razorpay UPI AutoPay mandate** from `subscriptions` — which creates no
+order until it is charged, so before this route a customer who tried and was never
+charged was invisible. A mandate's charge orders are folded into the mandate row.
+
+| Query | |
+|---|---|
+| kind | `APPLE`, `RAZORPAY_ONE_TIME`, `UPI_AUTOPAY_MANDATE`, `COMP` |
+| status | verbatim: orders `CREATED/PAID/FAILED/CANCELLED`, mandates `PENDING/ACTIVE/PAST_DUE/PAUSED/CANCELLED/EXPIRED` |
+| exam | slug or `none`; unknown → 400 |
+| from / to | IST calendar days |
+| search | email / name / phone, or the FULL external id |
+
+Row: `{ id, userId, kind, status, amountPaise|null, currency, examId|null, planType|null,
+createdAt, lastEventAt, ref, source: 'orders'|'subscriptions', isInternal, isSandbox,
+everCharged, user: { email, name, phoneNumber } }` — `amountPaise` is in **paise** here
+(unlike the rupee amounts above); `ref` is the external id cut to 8 chars + `…`. Page:
+`{ data, total, page, limit, hasMore, includeInternal, note }`. Full reference and example:
+[WHAT_CHANGED_2026-11.md §B1.2](./WHAT_CHANGED_2026-11.md).
 
 ---
 
@@ -802,6 +927,13 @@ POST /sme/notifications/segment
   "exam": "appsc-group-1" }
 ```
 `segment` ∈ `premium` (active paid) / `trial` (active free trial) / `free` (everyone else).
+**2026-11 (B3.2 + owner rule):** the cohorts are the §1.1a access axis collapsed —
+`premium` = holds a **live** entitlement (`paid` ∪ `comped`, incl. the legacy mapping),
+`trial` = access `trial` (each exam's own trial length — it was a fixed 14 days for
+everyone: prod "Cohort: Trial" reached 1,609 vs 274 on trial), `free` = everyone else.
+Scope = `exam` when sent (its entitlement rows + its exam mode), otherwise every user and
+rows of any exam. Also fixed: `free` dropped every ACTIVE user past their trial (a NULL
+`trial_ends_at` made NOT(…) NULL) — they were in no cohort at all.
 Resolves matching users and fans out a per-user push. **Response:**
 <!-- shape verified against code @c0a8fe5 — NOT captured on staging, see note -->
 ```json

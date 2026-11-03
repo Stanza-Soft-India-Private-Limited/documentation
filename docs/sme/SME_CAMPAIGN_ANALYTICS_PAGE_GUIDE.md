@@ -3,6 +3,11 @@
 > Changed 2026-09-21 — stale-text pass (telemetry live in 2.0, version ladder, links). Exam-dimension changes follow in [WHAT_CHANGED_2026-09-21.md](./WHAT_CHANGED_2026-09-21.md).
 > Changed 2026-09-21 — exam dimension on users, orders, offers, banners; two BREAKING calls (see [WHAT_CHANGED_2026-09-21.md](./WHAT_CHANGED_2026-09-21.md)).
 > Changed 2026-09-21 — per-exam broadcast, validated segment exam (+ fix), survey targetExams, feedback ?exam= (see [WHAT_CHANGED_2026-09-21.md](./WHAT_CHANGED_2026-09-21.md)).
+> Changed 2026-11-03 — lane B1 (see [WHAT_CHANGED_2026-11.md §B1](./WHAT_CHANGED_2026-11.md#b1--money-truth-contract-backend-lane-b1-2026-11-03)):
+> - the funnel and the chase list **exclude internal accounts by default** — delete the page's own 2-domain filter (`OfferAnalytics.tsx:92`); offer an explicit "include staff" toggle that sends `includeInternal=1`;
+> - **staff comps are out** of joined / paid / revenue / discount figures and of `/purchased`;
+> - the bridge "N reached checkout · X excluded (already converted) · Y internal hidden · Z listed" now comes from the server's **`excluded: { internal, paidAfterwards, compedByStaff, holdsExam }`** — label `compedByStaff` as **"comped by staff"**, never "already converted";
+> - "converted" is per the campaign's exam (one campaign = one exam, `campaign.examId`), so every money figure on this page is already per-exam — show the exam next to it.
 
 > ## ⛔ BEFORE YOU WRITE ANY UI CODE — INVOKE THE `frontend-design` SKILL
 > If you are a Claude/coding session rebuilding this page, your **first action** is to invoke the

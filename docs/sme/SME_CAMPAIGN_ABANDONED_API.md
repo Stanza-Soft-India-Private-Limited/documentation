@@ -3,6 +3,7 @@
 > Changed 2026-09-21 — stale-text pass (telemetry live in 2.0, version ladder, links). Exam-dimension changes follow in [WHAT_CHANGED_2026-09-21.md](./WHAT_CHANGED_2026-09-21.md).
 > Changed 2026-09-21 — exam dimension on users, orders, offers, banners; two BREAKING calls (see [WHAT_CHANGED_2026-09-21.md](./WHAT_CHANGED_2026-09-21.md)).
 > Changed 2026-09-21 — per-exam broadcast, validated segment exam (+ fix), survey targetExams, feedback ?exam= (see [WHAT_CHANGED_2026-09-21.md](./WHAT_CHANGED_2026-09-21.md)).
+> Changed 2026-11-03 — internal accounts excluded by default (`includeInternal`), comps out of joined/paid/revenue, "converted" is per the campaign's exam, new `excluded{}` block with `compedByStaff` (see §4 and [WHAT_CHANGED_2026-11.md §B1](./WHAT_CHANGED_2026-11.md#b1--money-truth-contract-backend-lane-b1-2026-11-03)).
 
 **Endpoint:** `GET /api/v1/sme/offers/:id/abandoned`
 **Auth:** `x-api-key: <API_KEY_SECRET>` (same key as every other `/sme/*` route)
@@ -191,6 +192,22 @@ there is no order, so there is no amount. Render a dash, never ₹0.
 ---
 
 ## 4. Who is deliberately excluded
+
+> **2026-11-03 (lane B1) — this section is superseded where it disagrees:**
+>
+> - **Internal accounts** (staff domains, store demo logins, sandbox testers) are excluded from
+>   rows, `total` AND `funnel` by default; `includeInternal=1` lists them with `isInternal`.
+>   On FREEDOM15, 6 of the 10 "reached checkout" were staff.
+> - **Staff comps are not conversions and not demand.** `payment_source = MANUAL` orders never
+>   count as `joined`, `paid`, `revenuePaise`, discount figures, and never appear on `/purchased`.
+> - **"Converted" is per the campaign's exam**: a later PAID order **for that exam**, or a live
+>   `user_exam_entitlements` row **for that exam**. The person-level `premium_expires_at`
+>   mirror is no longer read (it made a user comped in APPSC "converted" for a UPSC campaign).
+> - **New `excluded` block** (always present) explains the gap between "reached" and "listed",
+>   over the whole candidate set, one reason per person in this precedence:
+>   `{ internal, paidAfterwards, compedByStaff, holdsExam }`. **`compedByStaff` replaces the
+>   "already converted" label** — on FREEDOM15 all 4 "already converted" were later comps.
+>   `internal` is 0 when `includeInternal=1`.
 
 A row is dropped if **any** of these hold. All of them are intentional; do not ask for them to be
 relaxed without reading why.

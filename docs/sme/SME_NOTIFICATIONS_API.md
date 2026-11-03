@@ -211,12 +211,20 @@ x-api-key: <API_KEY_SECRET>
 | type / id / params | ➖ | as above |
 | exam | ➖ | exam slug — narrows the cohort to one exam mode. Omit to reach the whole cohort |
 
-**Segment definitions (authoritative — live state, not the raw status column):**
+**Segment definitions (authoritative, 2026-11 — B3.2 + owner rule; computed from
+`user_exam_entitlements`, not the `user_auth` mirror):**
 | segment | who |
 |---|---|
-| `premium` | `status = SUBSCRIBED` **and** not expired (`premium_expires_at` null or in the future) |
-| `trial` | `status = ACTIVE` **and** `trial_ends_at` still in the future — i.e. the trial length configured for the exam they started on, **not a fixed 14 days**. Rows with no `trial_ends_at` (pre-dating the column) fall back to "created within 14 days and never paid", so legacy accounts resolve exactly as they always did |
+| `premium` | holds a **live** entitlement (paid or staff comp) — in `exam` when sent, in any exam otherwise. A SUBSCRIBED user with no entitlement row anywhere counts via the legacy mapping (one virtual `upsc-cse` row, `expires_at = premium_expires_at`) — see SME_PORTAL_API §1.1a |
+| `trial` | onboarded, holds nothing live, and inside **their exam's** trial window: an SME-set `trial_ends_at` in the future, else `created_at` + the `exams.trial_policy` length in force at signup for their `active_exam_id` (NULL ≡ upsc-cse). Status ACTIVE or SUBSCRIBED (the gate's rule) |
 | `free` | everyone else |
+
+> 🔴 **Corrected 2026-11 (AUDIT L3).** This table used to claim the trial was per exam; the
+> code used `created_at` within a **fixed 14 days** for every user whose `trial_ends_at` was
+> NULL — which is every fresh signup — so prod "Cohort: Trial" reached **1,609** people while
+> the list showed **274** on trial (UPSC 3 days, APPSC 0). Separately, `free` negated a clause
+> containing `trial_ends_at > now`, which is NULL for a NULL column, so every ACTIVE user past
+> their trial was in **no** cohort. Both fixed.
 
 The three cohorts are **person-level**: they read the `user_auth` mirror, so "premium"
 means *holds premium somewhere*, not *holds premium in this exam*. `exam` is the other

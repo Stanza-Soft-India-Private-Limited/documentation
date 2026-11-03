@@ -1,5 +1,6 @@
 # CMS Admin API — Unified Content Management Guide
 
+> Changed 2026-11-03 (lane B4, keyless parity) — **every `/cms/*` route the SME portal calls now has a keyed `/sme/*` twin** with the same rows, filters, pagination and errors (proven by `src/modules/sme/sme-keyless-parity.spec.ts`). `/cms/*` is NOT removed. The keyed DELETEs are **soft + attributed** (`isActive=false` and a `CONTENT_DELETE` row in the content edit log, `{actor, reason}` required); the `/cms` DELETEs below are unchanged (hard for PYQ / Mains / psychometric). Full route map: the "Keyed equivalent" column in the [Quick Reference](#quick-reference--all-endpoints) and §0; what changed: [WHAT_CHANGED_2026-11.md](./WHAT_CHANGED_2026-11.md) §B4.
 > Changed 2026-10-30 — optional `language` on PYQ / Mains / Simulation / psychometric test-set writes, LENIENT here (`"ENGLISH"` → `en`, unknown → `en` + server warning, never a 400) — see [SME_CONTENT_LANGUAGE_API.md](./SME_CONTENT_LANGUAGE_API.md) §1.2.
 > LEGACY INGEST SURFACE — kept working, not extended. New integrations should use /sme/content/* (key-gated, exam-safe). Migration map in §0.
 
@@ -40,19 +41,26 @@ where new integrations should start.
 | `/cms/*` | `/sme/content/*` | difference |
 |---|---|---|
 | POST /cms/pyq | POST /sme/content/pyq | examIds required + validated; audited |
-| POST /cms/pyq/bulk | POST /sme/content/pyq/bulk | as above, per item; whole batch refused before any write |
+| POST /cms/pyq/bulk | POST /sme/content/pyq/bulk | as above, **validated per row** (2026-11-03): bad rows listed in `results[]`, good rows written; `/cms` bulk stays all-or-nothing |
 | PATCH /cms/pyq/:id | PATCH /sme/content/pyq/:id | present examIds must be non-empty + known |
-| GET /cms/pyq | GET /sme/content/pyq | identical filters incl. ?exam= |
-| (same four for mains) | | |
+| GET /cms/pyq | GET /sme/content/pyq | identical filters incl. ?exam=, plus `?language=` |
+| GET /cms/pyq/:id | GET /sme/content/pyq/:id | identical (2026-11-03) |
+| DELETE /cms/pyq/:id (hard) | DELETE /sme/content/pyq/:id | **soft** (`isActive=false`) + attributed `CONTENT_DELETE`; body `{actor, reason}` |
+| (same six for mains) | | |
 | POST /cms/simulations | POST /sme/content/simulations | examIds required |
 | PATCH /cms/simulations/:id | PATCH /sme/content/simulations/:id | present examIds validated |
 | GET /cms/simulations | GET /sme/content/simulations | identical |
+| — | GET /sme/content/simulations/:id | keyed only (the portal derived it from the list) |
+| GET /cms/simulations/questions | GET /sme/content/simulations/questions | identical |
+| DELETE /cms/simulations/:id (soft) | DELETE /sme/content/simulations/:id | soft, + attributed audit row |
 | POST /cms/simulations/questions/bulk | POST /sme/content/simulations/questions/bulk | audit only (no examIds: questions inherit the parent's) |
 | POST /cms/simulations/:id/assign-questions | same suffix under /sme/content | audit only |
-| DELETE /cms/*/:id, GET /cms/{pyq,mains}/:id, GET /cms/simulations/questions | not mirrored | keep using /cms |
+| `/cms/psychometric/*` (11 routes) | `/sme/content/psychometric/*` (same 11 suffixes) | same service/rows; DELETEs soft + attributed; test-set `language` strict; test-set list honours `isActive`/`search`/`language` |
 
-Psychometric content is not mirrored either, because it has no exam dimension to get wrong
-— see [§ Psychometric and the exam dimension](#psychometric-and-the-exam-dimension).
+The content-doc and reels twins are in [CONTENT_DOC_SME_API.md](./CONTENT_DOC_SME_API.md)
+(`/sme/content/docs`) and [SME_CONTENT_INGEST_API.md](./SME_CONTENT_INGEST_API.md) §10
+(`/sme/reels`, `/sme/content/edits`). Psychometric still has **no `examIds` and no question
+`language`**: the columns do not exist, so sending either is a 400 on both surfaces.
 
 ### `examIds` on `/cms/*` — exactly what it does
 
@@ -669,7 +677,8 @@ same pool. An exam opts out of the personality test entirely with the per-exam
 routes for that exam while leaving these authoring routes open, which is why an SME can keep
 editing test sets for an exam that does not offer the test.
 
-This is also why psychometric is not mirrored on `/sme/content/*` (§0).
+Since 2026-11-03 it IS mirrored, under `/sme/content/psychometric/*` (§0) — the keyed twin
+exists for the key and the audit trail, not for an exam dimension (there still is none).
 
 #### POST /cms/psychometric/questions
 
@@ -1234,38 +1243,41 @@ curl "{{BASE_URL}}/api/v1/cms/psychometric/test-sets?page=1&limit=10"
 
 ## Quick Reference — All Endpoints
 
-| Method   | Endpoint                           | Description                                       |
-| -------- | ---------------------------------- | ------------------------------------------------- |
-| `POST`   | `/cms/pyq`                         | Create PYQ question                               |
-| `POST`   | `/cms/pyq/bulk`                    | Bulk create PYQ questions                         |
-| `GET`    | `/cms/pyq`                         | List PYQ questions (filtered, paginated)          |
-| `GET`    | `/cms/pyq/:id`                     | Get single PYQ question                           |
-| `PATCH`  | `/cms/pyq/:id`                     | Update PYQ question                               |
-| `DELETE` | `/cms/pyq/:id`                     | Delete PYQ question                               |
-| `POST`   | `/cms/mains`                       | Create Mains question                             |
-| `POST`   | `/cms/mains/bulk`                  | Bulk create Mains questions                       |
-| `GET`    | `/cms/mains`                       | List Mains questions (filtered, paginated)        |
-| `GET`    | `/cms/mains/:id`                   | Get single Mains question                         |
-| `PATCH`  | `/cms/mains/:id`                   | Update Mains question                             |
-| `DELETE` | `/cms/mains/:id`                   | Delete Mains question                             |
-| `GET`    | `/cms/simulations`                 | List all simulations incl. inactive (`?exam=`)    |
-| `POST`   | `/cms/simulations`                 | Create simulation                                 |
-| `PATCH`  | `/cms/simulations/:id`             | Update simulation                                 |
-| `DELETE` | `/cms/simulations/:id`             | **Soft** delete (sets `isActive: false`)          |
-| `GET`    | `/cms/simulations/questions`       | Resolve `externalId` → UUID                       |
-| `POST`   | `/cms/simulations/questions/bulk`  | Bulk create simulation questions (1–500)          |
-| `POST`   | `/cms/simulations/:id/assign-questions` | Replace the assigned question list           |
-| `POST`   | `/cms/psychometric/questions`      | Create Psychometric question                      |
-| `POST`   | `/cms/psychometric/questions/bulk` | Bulk create Psychometric questions                |
-| `GET`    | `/cms/psychometric/questions`      | List Psychometric questions (filtered, paginated) |
-| `GET`    | `/cms/psychometric/questions/:id`  | Get single Psychometric question                  |
-| `PATCH`  | `/cms/psychometric/questions/:id`  | Update Psychometric question                      |
-| `DELETE` | `/cms/psychometric/questions/:id`  | Delete Psychometric question                      |
-| `POST`   | `/cms/psychometric/test-sets`      | Create test set                                   |
-| `GET`    | `/cms/psychometric/test-sets`      | List test sets (paginated)                        |
-| `GET`    | `/cms/psychometric/test-sets/:id`  | Get test set + questions                          |
-| `PATCH`  | `/cms/psychometric/test-sets/:id`  | Update test set                                   |
-| `DELETE` | `/cms/psychometric/test-sets/:id`  | Delete test set                                   |
+Every keyed equivalent needs `x-api-key` ([SME_CONTENT_INGEST_API.md](./SME_CONTENT_INGEST_API.md) §1). "≡" = same rows, shape and errors on the same input (pinned by `sme-keyless-parity.spec.ts`).
+
+| Method   | Endpoint                           | Description                                       | Keyed equivalent (2026-11-03) |
+| -------- | ---------------------------------- | ------------------------------------------------- | ----------------------------- |
+| `POST`   | `/cms/pyq`                         | Create PYQ question                               | `POST /sme/content/pyq` (examIds required) |
+| `POST`   | `/cms/pyq/bulk`                    | Bulk create PYQ questions                         | `POST /sme/content/pyq/bulk` (per-row results) |
+| `GET`    | `/cms/pyq`                         | List PYQ questions (filtered, paginated)          | `GET /sme/content/pyq` ≡ (+ `?language=`) |
+| `GET`    | `/cms/pyq/:id`                     | Get single PYQ question                           | `GET /sme/content/pyq/:id` ≡ |
+| `PATCH`  | `/cms/pyq/:id`                     | Update PYQ question                               | `PATCH /sme/content/pyq/:id` |
+| `DELETE` | `/cms/pyq/:id`                     | Delete PYQ question (hard)                        | `DELETE /sme/content/pyq/:id` — soft + `{actor, reason}` |
+| `POST`   | `/cms/mains`                       | Create Mains question                             | `POST /sme/content/mains` |
+| `POST`   | `/cms/mains/bulk`                  | Bulk create Mains questions                       | `POST /sme/content/mains/bulk` (per-row results) |
+| `GET`    | `/cms/mains`                       | List Mains questions (filtered, paginated)        | `GET /sme/content/mains` ≡ (+ `?language=`) |
+| `GET`    | `/cms/mains/:id`                   | Get single Mains question                         | `GET /sme/content/mains/:id` ≡ |
+| `PATCH`  | `/cms/mains/:id`                   | Update Mains question                             | `PATCH /sme/content/mains/:id` (+ `marks`) |
+| `DELETE` | `/cms/mains/:id`                   | Delete Mains question (hard)                      | `DELETE /sme/content/mains/:id` — soft + `{actor, reason}` |
+| `GET`    | `/cms/simulations`                 | List all simulations incl. inactive (`?exam=`)    | `GET /sme/content/simulations` ≡ |
+| `POST`   | `/cms/simulations`                 | Create simulation                                 | `POST /sme/content/simulations` |
+| `PATCH`  | `/cms/simulations/:id`             | Update simulation                                 | `PATCH /sme/content/simulations/:id` |
+| `DELETE` | `/cms/simulations/:id`             | **Soft** delete (sets `isActive: false`)          | `DELETE /sme/content/simulations/:id` — soft + `{actor, reason}` |
+| `GET`    | `/cms/simulations/questions`       | Resolve `externalId` → UUID                       | `GET /sme/content/simulations/questions` ≡ |
+| `POST`   | `/cms/simulations/questions/bulk`  | Bulk create simulation questions (1–500)          | `POST /sme/content/simulations/questions/bulk` |
+| `POST`   | `/cms/simulations/:id/assign-questions` | Replace the assigned question list           | `POST /sme/content/simulations/:id/assign-questions` |
+| —        | —                                  | —                                                 | `GET /sme/content/simulations/:id` (keyed only) |
+| `POST`   | `/cms/psychometric/questions`      | Create Psychometric question                      | `POST /sme/content/psychometric/questions` |
+| `POST`   | `/cms/psychometric/questions/bulk` | Bulk create Psychometric questions                | `POST /sme/content/psychometric/questions/bulk` |
+| `GET`    | `/cms/psychometric/questions`      | List Psychometric questions (filtered, paginated) | `GET /sme/content/psychometric/questions` ≡ |
+| `GET`    | `/cms/psychometric/questions/:id`  | Get single Psychometric question                  | `GET /sme/content/psychometric/questions/:id` ≡ |
+| `PATCH`  | `/cms/psychometric/questions/:id`  | Update Psychometric question                      | `PATCH /sme/content/psychometric/questions/:id` |
+| `DELETE` | `/cms/psychometric/questions/:id`  | Delete Psychometric question (hard)               | `DELETE /sme/content/psychometric/questions/:id` — soft + `{actor, reason}` |
+| `POST`   | `/cms/psychometric/test-sets`      | Create test set                                   | `POST /sme/content/psychometric/test-sets` (language strict) |
+| `GET`    | `/cms/psychometric/test-sets`      | List test sets (paginated)                        | `GET /sme/content/psychometric/test-sets` ≡ without filters; honours `isActive`/`search`/`language` |
+| `GET`    | `/cms/psychometric/test-sets/:id`  | Get test set + questions                          | `GET /sme/content/psychometric/test-sets/:id` ≡ |
+| `PATCH`  | `/cms/psychometric/test-sets/:id`  | Update test set                                   | `PATCH /sme/content/psychometric/test-sets/:id` (language strict) |
+| `DELETE` | `/cms/psychometric/test-sets/:id`  | Delete test set (hard; FK-refused once results exist) | `DELETE /sme/content/psychometric/test-sets/:id` — soft + `{actor, reason}` |
 
 ### Common Filter Parameters (PYQ, Mains, Psychometric Questions)
 

@@ -254,13 +254,25 @@ gracefully at zero rows.
 ### Summary — `GET /sme/feedback/chat/summary`
 
 `{ total, byRating: { up, down }, byMode: [{ mode, count }], topChips: [{ key,
-count }], difyForwardFailures }`. `difyForwardFailures` counts rows whose Dify
+count }], difyForwardFailures, window: { from, to }, exam }`. `difyForwardFailures` counts rows whose Dify
 forward did not succeed (`difyForwarded=false` with a recorded `difyError`, e.g.
 `no_api_key`).
 
+**Window + exam (2026-11, D23).** Query: `from`, `to`, `exam` — all optional, all-time when
+omitted. `from`/`to` take an **IST date** (`YYYY-MM-DD`; `to` covers the whole IST day, the
+bound being the next IST midnight, exclusive — `from=to=D` is exactly day D) or an ISO
+instant; they filter `created_at`. `exam` follows the **reports rule** (§1): a slug matches
+`chat_message_feedback.exam_id` exactly (unknown slug = 400), `none` lists rows with no exam
+(pre-2.1 clients, served as UPSC but not recorded as such — not guessed into `upsc-cse`).
+**Every** number on the card is scoped, the Dify-failure count included — so
+`from=2026-10-13` answers "any forward failures since the key landed?" (prod: 0 of 20).
+`window` and `exam` echo what was applied (nulls when not sent). No span cap: the table is
+permanent and small.
+
 ### Messages — `GET /sme/feedback/chat/messages`
 
-Query: `rating` (default `down`), `mode` (mentor|sme), `page`, `limit`. Returns
+Query: `rating` (default `down`), `mode` (mentor|sme), `from`, `to`, `exam` (same rules as
+the summary, 2026-11), `page`, `limit`. Returns
 the same `{ data, total, page, limit, hasMore }` pagination wrapper as the report
 list, with rows of `{ id, userId, messageId, mode, rating, subject, chips, text,
 examId, difyForwarded, difyError, createdAt, updatedAt }`.
@@ -348,7 +360,18 @@ The 9 chip sets are `chat`, `pyq_question`, `mains_question`,
 `feature_request`, `app_error`.
 
 `PUT` accepts a partial `{ chipSets?, survey?, limits? }`. Only the sections you
-send are touched (row-locked read-modify-write). `survey.listWindowDays` (default
+send are touched (row-locked read-modify-write). **Numbers are validated (2026-11, AUDIT C8;
+they used to be stored unchecked — `snoozeDays: -5` saved):** integers only, `null` and
+unknown keys are 400s.
+
+| Field | Range | Default |
+|---|---|---|
+| `survey.snoozeDays` | 0–365 | 3 |
+| `survey.maxDismissals` | 0–50 | 2 |
+| `survey.listWindowDays` | 1–365 | 30 |
+| `limits.reportsPerDay` | 0–100 (0 = reporting off) | 10 |
+| `limits.chatPerDay` | 0–1000 | 30 |
+ `survey.listWindowDays` (default
 30) bounds how far back the user-facing surveys inbox looks — see §4.1. Chip
 **keys** are stable ids —
 `^[a-z0-9_]{1,40}$`, unique within a set, each with a non-empty label; **labels**
@@ -462,7 +485,10 @@ dismissed }`.
 ### Edit — `PATCH /sme/surveys/:id`
 
 `title`, `description`, `priority`, `endAt`, and the `target*` arrays — `targetExams`
-included — are editable at any time. **`questions` are structurally frozen once a survey
+included — are editable at any time. **To clear** the description or the end date send
+**`null`** (`"endAt": ""` also clears) — the backend has always honoured this; the portal
+dropped empty fields from the body, so they could not be cleared (AUDIT C8). `startAt` /
+`endAt` must be ISO 8601 datetimes (2026-11; garbage used to 500). **`questions` are structurally frozen once a survey
 is `ACTIVE`** (`SurveyStructuralEditBlocked`, 409) — fix by cloning into a new
 survey. Questions are editable while `DRAFT`.
 
@@ -527,7 +553,11 @@ Audited.
 before that field existed has `targetExams: []` and notifies exactly who it always did.
 `upsc-cse` in the list also matches users with no stored exam preference.
 
-### Results — `GET /sme/surveys/:id/results?breakdown=tier|platform|exam`
+### Results — `GET /sme/surveys/:id/results?breakdown=tier|platform|exam&from=&to=`
+
+**Window (2026-11, D23):** `from`/`to` (IST dates as on chat/summary, or ISO instants) keep
+only answers whose `answered_at` falls inside; the response always carries
+`window: { from, to }` (nulls = all time). `totalResponses` is then "answered in the window".
 
 Per question:
 - choice → `options: [{ key, label, count, pct }]`

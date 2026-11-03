@@ -301,11 +301,11 @@ POST /sme/exams/appsc-group-1/plans
 | Field | Notes |
 |---|---|
 | `planId` | Public tier slug the paywall renders: `monthly` or `annual`. Upsert key with the exam. |
-| `planType` | `MONTHLY` (+30d) or `ANNUAL` (+365d). Drives the grant duration. |
-| `priceInPaise` | What **Razorpay** charges and what the **Android/web** paywall shows. ⚠️ iOS renders StoreKit's own price, NOT this — keep it in step with the App Store Connect price tier by hand. |
+| `planType` | `MONTHLY` (+30d) or `ANNUAL` (+365d). Drives the grant duration. **Required to create a plan, optional on an edit** (2026-11); `null` is a 400. |
+| `priceInPaise` | **Required to create a plan, optional on an edit** (2026-11); `null` / 0 is a 400. What **Razorpay** charges and what the **Android/web** paywall shows. ⚠️ iOS renders StoreKit's own price, NOT this — keep it in step with the App Store Connect price tier by hand. |
 | `strikePriceInPaise` | **DISPLAY ONLY** (2026-09-17). Rendered struck through beside the real price, with the same period suffix (`₹7,999 /year` above `₹5,900 /year`). Nothing charges it and no grant reads it. Must be **strictly greater** than `priceInPaise` — a strike at or below the real price is an advertised lie, and it is a 400. Omit to leave the stored value alone; send `null` to remove the strike. |
-| `appleProductId` | **Globally unique across exams.** Apple webhooks carry only this id, so it is the sole means of knowing which exam a payment bought. Two exams sharing one product would sell a single subscription as two entitlements — the API returns 400 rather than allow it. |
-| `razorpayPlanId` | Also globally unique. |
+| `appleProductId` | **Globally unique across exams.** Apple webhooks carry only this id, so it is the sole means of knowing which exam a payment bought. Two exams sharing one product would sell a single subscription as two entitlements — the API returns 400 rather than allow it. Omit = keep, `null` = clear, **blank (`""` / spaces) = 400** (2026-11) — an empty box never means "clear". |
+| `razorpayPlanId` | Also globally unique. Same omit / `null` / blank rules. |
 
 ### ⚠️ This upsert MERGES (fixed 2026-09-17)
 
@@ -318,6 +318,20 @@ no exam and granted nothing. Same defect class as the campaign `priceInPaise` wi
 The strike price is validated against whichever price the row will actually end up with,
 so `{ "strikePriceInPaise": 799900 }` on its own is still checked against the stored
 `priceInPaise`.
+
+> 🔴 **Fixed 2026-11 (AUDIT C2): that merge was unreachable.** `planType` and
+> `priceInPaise` were REQUIRED by the DTO, while the portal's plan editor sends only the
+> fields that changed (`PlansTab.tsx:57–66`). Every strike-only, store-id-only or
+> price-only edit was a 400 before the service ran — no plan had been edited since
+> 2026-09-16. Both are now optional on an edit; a `POST` for a `planId` that does not exist
+> yet still needs both (400 `"… planType and priceInPaise are required to create it"`).
+> These bodies are all valid edits now:
+> ```jsonc
+> { "planId": "annual", "strikePriceInPaise": 799900 }   // strike only
+> { "planId": "annual", "strikePriceInPaise": null }     // remove the strike
+> { "planId": "annual", "priceInPaise": 590000 }         // price only
+> { "planId": "annual", "appleProductId": "com.…annual" } // store id only
+> ```
 
 `DELETE` **deactivates, never deletes**: orders and entitlements reference these identifiers,
 and a renewal webhook for a deleted product id would have no exam to resolve to.

@@ -1,5 +1,6 @@
 # Content Document — SME / AI Stack API Guide
 
+> Changed 2026-11-03 (lane B4, audit K2/K3) — **a re-sync no longer deletes quiz questions**: `PATCH` with new `rawMarkdown` and `reparse` now UPSERT the document's questions in place (learners' answers survive), keep the **slug** unless the body sets one, and change **status** only when sent — on both surfaces. And a keyed twin: **`/sme/content/docs`** (x-api-key; `examIds` required on create, `language` strict, `?language=` on the list, explicit `slug` on PATCH, attributed soft DELETE) — see [§ Keyed equivalent](#keyed-equivalent--smecontentdocs-2026-11-03) and [WHAT_CHANGED_2026-11.md](./WHAT_CHANGED_2026-11.md) §B4.
 > Changed 2026-10-30 — `language` is a code now (`"en"`, `"hi"`; `"ENGLISH"` still accepted and stored as `en`, an unknown code stored as `en` with a server warning); `X-Lang` filters the list (absent = every language, unknown = 400) — see [SME_CONTENT_LANGUAGE_API.md](./SME_CONTENT_LANGUAGE_API.md) §1.2, §2.
 > Changed 2026-09-21 — exam-safe ingest: /sme/content/* + examIds on /cms and content-doc (see [WHAT_CHANGED_2026-09-21.md](./WHAT_CHANGED_2026-09-21.md)).
 > Changed 2026-09-21 — per-exam broadcast, validated segment exam (+ fix), survey targetExams, feedback ?exam= (see [WHAT_CHANGED_2026-09-21.md](./WHAT_CHANGED_2026-09-21.md)).
@@ -216,16 +217,18 @@ The Fundamental Rights form the cornerstone of Indian democracy.
 
 ## All Endpoints
 
-| Method | Endpoint | Description |
-|---|---|---|
-| `POST` | `/content-doc-admin` | Create a document from raw markdown |
-| `GET` | `/content-doc-admin` | List (paginated, filterable, `?exam=`) |
-| `GET` | `/content-doc-admin/by-source/:sourceId` | Look up by the generator's source ID |
-| `GET` | `/content-doc-admin/:id` | Get one, including `rawMarkdown` |
-| `PATCH` | `/content-doc-admin/:id` | Update (re-parses if markdown changed) |
-| `POST` | `/content-doc-admin/reparse-all` | Re-parse every document with `totalQuestions = 0` |
-| `POST` | `/content-doc-admin/:id/reparse` | Re-parse one document from its stored markdown |
-| `DELETE` | `/content-doc-admin/:id` | Soft delete (`isActive: false`) |
+| Method | Endpoint | Description | Keyed equivalent (2026-11-03) |
+|---|---|---|---|
+| `POST` | `/content-doc-admin` | Create a document from raw markdown | `POST /sme/content/docs` — `examIds` required, `language` strict |
+| `GET` | `/content-doc-admin` | List (paginated, filterable, `?exam=`) | `GET /sme/content/docs` ≡, + `?language=` |
+| `GET` | `/content-doc-admin/by-source/:sourceId` | Look up by the generator's source ID | `GET /sme/content/docs/by-source/:sourceId` ≡ |
+| `GET` | `/content-doc-admin/:id` | Get one, including `rawMarkdown` | `GET /sme/content/docs/:id` ≡ |
+| `PATCH` | `/content-doc-admin/:id` | Update (re-parses if markdown changed) | `PATCH /sme/content/docs/:id` — same re-sync, + explicit `slug`, strict examIds/language |
+| `POST` | `/content-doc-admin/reparse-all` | Re-parse every document with `totalQuestions = 0` | none (a repair script, not a portal action) |
+| `POST` | `/content-doc-admin/:id/reparse` | Re-parse one document from its stored markdown | `POST /sme/content/docs/:id/reparse` ≡ |
+| `DELETE` | `/content-doc-admin/:id` | Soft delete (`isActive: false`) | `DELETE /sme/content/docs/:id` — soft + `{actor, reason}` + audit row |
+
+"≡" = same status, rows and error body on the same input (`src/modules/sme/sme-keyless-parity.spec.ts`).
 
 ### POST /content-doc-admin
 Create a new document. Body as shown above.
@@ -270,7 +273,23 @@ Get full document by ID. Response includes `rawMarkdown` for re-editing.
 ### PATCH /content-doc-admin/:id
 Update a document. Send only the fields you want to change.
 
-**If `rawMarkdown` is included:** All existing questions are deleted and recreated from the new markdown. This is a full overwrite of content.
+**If `rawMarkdown` is included and differs from the stored markdown** (changed 2026-11-03):
+the document is re-parsed and its quiz questions are **upserted in place — never deleted**.
+Until 2026-11-03 they were deleted and recreated, and because a learner's quiz answer
+(`user_question_attempts`) is deleted with its question, **every edited re-sync erased every
+learner's answers on that document** (prod: 200 documents, 10,358 questions recreated).
+Now each parsed question claims an existing row — first one with the same text and options
+(so inserting a question moves the others instead of re-pointing their answers), then the
+row at the same position (so a typo fix keeps the row). Claimed rows keep their id and
+answers; new questions are created; a question that disappeared is **deactivated**
+(`isActive: false`, parked at `sectionOrder: -1`) with its answers kept as history and no
+longer counted in progress. `sections[].questionIds` always lists the live ids.
+
+**Slug and status are kept** unless the body sets them: `status` changes only when sent (the
+portal's push sends `"PUBLISHED"` on every re-sync — that re-publishes an archived document;
+the fix is on the portal side), and the slug is no longer regenerated from the title (it
+was, with a timestamp, on every PATCH that carried a title). Only the keyed route can set a
+slug (`"slug": "fundamental-rights"`); this route has no slug field.
 
 **If only metadata changes** (title, subject, topic, status, etc.): Questions are untouched.
 
@@ -289,8 +308,9 @@ Update a document. Send only the fields you want to change.
 ```
 
 ### POST /content-doc-admin/:id/reparse
-Re-parse a document **from its existing `rawMarkdown`** — no body. Deletes and recreates its
-`ContentQuestion` rows and rewrites `sections`, `totalQuestions` and `estimatedReadMinutes`.
+Re-parse a document **from its existing `rawMarkdown`** — no body. Upserts its
+`ContentQuestion` rows in place (same rule as a re-sync above — since 2026-11-03 nothing is
+deleted) and rewrites `sections`, `totalQuestions` and `estimatedReadMinutes`.
 
 This is the repair route for a document whose quiz fences were malformed when it was first
 created: fix nothing, just re-run the parser after a parser fix. It does **not** change
@@ -319,6 +339,29 @@ still comes back with `totalQuestions: 0`.
 
 ### DELETE /content-doc-admin/:id
 Soft delete — sets `isActive: false`. Document is hidden from users but not destroyed.
+
+---
+
+## Keyed equivalent — `/sme/content/docs` (2026-11-03)
+
+`x-api-key` required ([SME_CONTENT_INGEST_API.md](./SME_CONTENT_INGEST_API.md) §1). Every
+route calls the same `ContentDocService` as `/content-doc-admin`, so rows, 404 sentences and
+the re-sync behaviour are identical. Differences, all deliberate:
+
+| | `/content-doc-admin` | `/sme/content/docs` |
+|---|---|---|
+| Auth | none | `x-api-key` |
+| `examIds` on create | optional → `["upsc-cse"]` | **required**, every slug must exist (`*` allowed); the one-sentence 400 of `/sme/content` |
+| `language` on writes | lenient (`"ENGLISH"` → `en`, unknown → `en`) | strict: absent → `en`, unknown / `"ENGLISH"` → 400 |
+| List language | `X-Lang` header | `?language=` (wins) or `X-Lang` — the portal proxy cannot send headers |
+| `slug` on PATCH | not accepted (400) | `"slug"` sets it explicitly (lower-case letters, digits, single hyphens; taken → 400 `Unique constraint violation`) |
+| DELETE | soft, body-less, unlogged | soft, body `{actor, reason, note?, reportId?}` required, `CONTENT_DELETE` audit row in the same transaction |
+| Audit | none | every create / PATCH / reparse recorded as `CONTENT_INGEST` (`after.bank = "docs"`) |
+| `reparse-all` | yes | no |
+
+Idempotent push on the keyed route: `GET /sme/content/docs/by-source/<sourceId>` → `PATCH
+/sme/content/docs/<id>` when it returns, `POST /sme/content/docs` (with `sourceId`) on 404.
+Send `status` only when you mean to change it.
 
 ---
 

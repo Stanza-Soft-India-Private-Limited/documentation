@@ -1,6 +1,7 @@
 # SME — Apple IAP Payments & Events API Guide
 
 > Changed 2026-09-21 — exam dimension on users, orders, offers, banners; two BREAKING calls (see [WHAT_CHANGED_2026-09-21.md](./WHAT_CHANGED_2026-09-21.md)).
+> Changed 2026-11-03 — `listAmount` is the bought exam's plan price (no fake APPSC strike); `isSandbox` on events from the JWS environment; `isComp`/`isSandbox`/`isInternal` on rows; events linked to user/order; IST date filters (see [WHAT_CHANGED_2026-11.md §B1](./WHAT_CHANGED_2026-11.md#b1--money-truth-contract-backend-lane-b1-2026-11-03)).
 
 Reference for the **SME portal** to display **Apple In-App Purchase** data — both the
 **payments/orders** (who paid, how much, which plan, current status) and the **Apple
@@ -230,7 +231,8 @@ shape from code):
 | `examId` | Which exam was bought, resolved from the **signed** `productId` via `exam_plans.apple_product_id`. **`null` when that lookup missed** — see `reconcileHint` below. |
 | `isTest` | Sandbox purchase. iOS sandbox reaches the **production** backend (Apple has no separate endpoint), so every TestFlight/StoreKit test writes a genuine `PAID` order at a real price — one evening produced ₹59,000 of phantom revenue. Excluded from the lists by default; **never** counted as revenue. |
 | `offerCode` | The campaign this redemption maps to, matching the Razorpay convention. `null` for a standard-price purchase — which is exactly why a renewal at list price inside a campaign window can never be mis-attributed to the campaign. |
-| `listAmount` | ₹, the undiscounted price, set **only** when `amount` is a real charged amount — so "discounted" is never inferred from a guess. |
+| `listAmount` | ₹, the undiscounted price, set **only** when `amount` is a real charged amount — so "discounted" is never inferred from a guess. **Since 2026-11-03 (B1.5)** it is the **bought exam's** `exam_plans.price_in_paise` for that plan type (APPSC monthly ₹499, UPSC ₹599); before, every exam got the global UPSC price, so all 6 Apple APPSC orders show a fake ₹599 → ₹499 "discount". Those older rows are NOT rewritten — don't draw a strike when `listAmount` ≠ the exam's plan price on an order before 2026-11-03. The global price is used only when the exam has no plan of that type (logged). |
+| `isSandbox` / `isComp` / `isInternal` | 2026-11 row flags: sandbox (= `isTest`), staff grant (MANUAL — not money), internal account (excluded unless `includeInternal=1`). |
 | `storefrontCurrency` | Apple's **true** storefront currency (`"USD"`, `"AED"`, …). `null` for Razorpay/MANUAL, and for any Apple transaction where Apple supplied no price (pre-2023 JWS). |
 | `chargedAmount` | What Apple **actually charged**, in that storefront's currency, as a major unit. |
 
@@ -287,7 +289,18 @@ GET /sme/webhooks?source=APPLE&page=&limit=&startDate=&endDate=&search=
 | Query | Description |
 |---|---|
 | **source** | `APPLE` = Apple notifications only · `RAZORPAY` = Razorpay webhooks only · omit = both · `MANUAL` = always empty (manual grants emit no provider event) |
-| startDate / endDate | ISO bounds on `receivedAt` |
+| startDate / endDate | `YYYY-MM-DD` = IST calendar days on `receivedAt` (end day fully included) |
+| kind | `money` (hide Razorpay `payment.downtime.*`), `downtime`, `all` (default) |
+| includeInternal | `1` to keep events of internal users (default: excluded where the user is known) |
+
+**2026-11 — sandbox events are labelled.** Every row has `isSandbox`: for Apple it is read
+from the stored notification JWS (`data.environment === 'Sandbox'`), so it also catches the
+6 sandbox notifications from 2026-06-24…29 that were stored as `processed` before the
+environment gate. `result: 'ignored'` = a notification for the OTHER environment (Sandbox
+on production); explain it in the UI as "TestFlight / sandbox — ignored on purpose, no
+money, no premium". The "Apple events recorded" headline should read
+`GET /sme/analytics/summary → money.appleEvents.production`. Events are now linked to
+`userId` / `orderId` (at ingest; older rows via the backfill script).
 | search | matches `eventId` (Apple `notificationUUID`) or `eventType` (e.g. `apple.DID_RENEW`) |
 | ~~exam~~ | **Accepted by the shared query DTO but deliberately ignored here.** See the note under the field reference. |
 
