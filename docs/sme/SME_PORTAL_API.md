@@ -3,6 +3,7 @@
 > Changed 2026-09-21 — exam dimension on users, orders, offers, banners; two BREAKING calls (see [WHAT_CHANGED_2026-09-21.md](./WHAT_CHANGED_2026-09-21.md)).
 > Changed 2026-09-21 — per-exam broadcast, validated segment exam (+ fix), survey targetExams, feedback ?exam= (see [WHAT_CHANGED_2026-09-21.md](./WHAT_CHANGED_2026-09-21.md)).
 > Changed 2026-11-03 — lane B1 "money truth": internal accounts excluded by default (`includeInternal`), `isInternal` / `isComp` / `isSandbox` row flags, IST calendar-day date filters, payment attempts (incl. UPI AutoPay mandates), per-exam money (see [WHAT_CHANGED_2026-11.md §B1](./WHAT_CHANGED_2026-11.md#b1--money-truth-contract-backend-lane-b1-2026-11-03)).
+> Changed 2026-11-03 (lane B6) — `GET /sme/users?platform=none` (no active push device); `platform` validated (see [WHAT_CHANGED_2026-11.md §B6](./WHAT_CHANGED_2026-11.md#b6--follow-ups-surfaced-by-the-portal-lanes-backend-lane-b6-2026-11-03)).
 
 End-to-end reference for the **SME portal** to manage the PrepMonkey app's users,
 transactions, blogs, and notifications. This is the management/admin surface of the
@@ -67,7 +68,7 @@ GET /sme/users?page=1&limit=20&search=&status=&exam=&access=&language=&createdFr
 | premium | boolean | **LEGACY** (account-wide, UPSC-era). `true` = currently premium. **Without `exam`:** the person-level mirror (`user_auth` SUBSCRIBED and not expired). **With `exam`:** a live, un-revoked `user_exam_entitlements` row for **that** exam (NULL expiry = perpetual). `false` (2026-11) is the exact complement — until then it was **silently ignored**. Prefer `access=`. |
 | premiumState | enum | **LEGACY** (2026-11; was a 400). `Premium` \| `Trial` \| `Trial Ended` \| `Churned` \| `Downloaded` — returns exactly the rows whose `premiumState` shows that label (same derivation, person-level trial length). Prefer `access=` + `exam=`. |
 | onboarded | boolean | filter by onboarding completion |
-| platform | enum | `ios` \| `android` \| `web` (has an active device token) |
+| platform | enum | `ios` \| `android` \| `web` = has an **active** push token on that platform; **`none`** (2026-11, B6.4) = has **no active** push token on any platform — the people a push cannot reach (never granted permission, uninstalled, or FCM deactivated the token; inactive tokens do not count). Any other value is a **400** (it used to match nothing and return an empty page — `none` silently returned 0). |
 
 #### 1.1a The Access axis (`access=`, 2026-11)
 

@@ -508,3 +508,125 @@ hand SQL.
   → `examDefaulted: true`.
 - An ONBOARDING user's `PATCH {name, status:"ONBOARDING"}` → 200 (staging has no ONBOARDING
   user today; pick one on prod read-only or create one on staging via a fresh sign-up).
+
+---
+
+## §B6 — Follow-ups surfaced by the portal lanes (backend lane B6, 2026-11-03)
+
+Commits on `main` (in order): B6.1 — none (BLOCKED, see below) · B6.2 `b637832` ·
+B6.3 `49703b6` · B6.4 `a890bda` · B6.5 (this doc). **Committed, NOT deployed.** No
+migration, no new table. Staging proofs below were run **read-only** (the real service
+methods / their rendered SQL against the staging database, compared with hand SQL); the
+HTTP checks are in §B6.6 for after the owner's staging deploy.
+
+### B6.1 Usage maintenance jobs — BLOCKED (the stated cause is not in the code)
+
+The plan said the `api_usage` rollup/purge jobs were skipped because
+`NotificationSchedulerService.onModuleInit` returns early under
+`NOTIFICATION_ENGINE_ENABLED=false`. They are not: `ApiUsageRollupService` registers
+both repeatable jobs (`api-usage-rollup` / `api-usage-purge`, 00:30 / 01:30 IST) in its
+**own** `onModuleInit`, gated only by **`API_USAGE_ROLLUP_ENABLED`** (default on;
+`false` disables). **`.env.staging` sets `API_USAGE_ROLLUP_ENABLED=false` on purpose**
+("its purge deletes rows" — docs/staging.md "Traps"). Production does not set it, so prod
+runs both.
+
+Staging, 2026-11-03: `api_usage_daily` **0 rows ever**; raw `api_usage` 116,113 rows from
+2026-09-09 (the 30-day purge has never run either). No code was changed: renaming the flag
+would silently start the row-deleting purge on staging, overriding a deliberate setting.
+**Owner decision:** to get rollups on staging, set `API_USAGE_ROLLUP_ENABLED=true` in the
+staging task definition (the purge then trims raw `api_usage` to 30 days and `auth_events` to
+90 days on staging). If rollup-without-purge is wanted, that is a new flag — ask for it.
+
+### B6.2 `/sme/analytics/users` rows: `daysStudied`, `sessions`, `minutesInApp`
+
+Every row gains three integers over the route's window (the same window as `actions30d`),
+**always present**, `0` = nothing:
+
+| field | rule |
+|---|---|
+| `sessions` | the profile's `timeInApp` sitting rule: runs of `api_usage` + `auth_events` rows with no gap over 30 min |
+| `minutesInApp` | Σ (last − first) per sitting — a floor; = the profile's `timeInApp.minutes` |
+| `daysStudied` | distinct IST days with a **study** action (the `actions30d` tables). ⚠️ **not** `timeInApp.activeDays` (any request = "opened the app") |
+
+The sitting rule now lives in ONE SQL builder (`sittingsCte`,
+`src/modules/sme/services/sme-sittings.util.ts`) that both the snapshot and the list read,
+so a row and the profile it links to cannot disagree. `actions30d` is kept. One extra
+query per page (≤ 100 ids); a failure fails the request.
+
+Staging proof (window 2026-10-04T12:00Z → 2026-11-03T12:00Z): the profile's `timeInApp` is
+unchanged by the refactor (user 7a3f19d2: 8 sessions / 119 min / 6 days / median 8.6;
+17ee1dee: 31 / 2051 / 13 / 17.6 — before = after); the list rows for the same users and
+window: `sessions`/`minutesInApp` 8/119 and 31/2051 (= the profile); 17ee1dee
+`daysStudied` 7 = hand SQL over the study tables (7 IST dates).
+
+**Deviation from the brief:** the brief described the profile's days as coming "from
+attempts/progress tables"; the profile's `activeDays` actually counts any request/event.
+`daysStudied` follows the brief (study tables) and the difference is documented.
+
+### B6.3 `/sme/analytics/*` dates are IST days
+
+`startDate` / `endDate` on every route served by `SmeAnalyticsService` (dau, features,
+users, signups, retention, premium-engagement, paywall-hits, heatmap, endpoints, content,
+notifications) now go through `istDateRange` (`sme-date-range.util.ts`, the B1 rule):
+
+- bare `YYYY-MM-DD` = an IST day: start inclusive from 00:00 IST, end = the **whole** IST
+  day (< next 00:00 IST), so `startDate=endDate=D` is one day;
+- an ISO instant is literal — the portal's `+05:30` workaround keeps working and lands on
+  the same bounds;
+- unparseable or inverted → **400** (it used to reach Postgres as an Invalid Date).
+
+Also fixed: the rollup's DATE grain (`dau`, `endpoints`) compared the UTC date of the bound
+(the day before an IST midnight) — it compares IST dates now; and `paywall-hits`, `heatmap`,
+`premium-engagement` and the `/users` `actions30d` join ignored `endDate` — they honour it.
+Without dates nothing moves (`until = now`). The insight routes (release-health,
+notification-effectiveness, onboarding-funnel, question-quality) already used
+`resolveIstWindow` and are unchanged.
+
+Staging proof: signups for `2026-09-01`..`2026-11-03` as bare dates and as `+05:30` instants
+render identical bounds (`2026-08-31 18:30` .. `2026-11-03 18:29:59.999` UTC) and both
+return 6 = hand SQL over IST dates.
+
+### B6.4 `platform=none` + segment count
+
+- `GET /sme/users?platform=none` — users with **no active** push token on any platform.
+  `platform` is validated (`ios|android|web|none`, else 400). It used to match the literal
+  `'none'` and return 0.
+- `GET /sme/notifications/segment/count?segment=&exam=` →
+  `{ matchedUsers, segment, exam, examDefaulted }` — what `POST /sme/notifications/segment`
+  would reach, **sending nothing**. Both routes call one method (`segmentAudience`:
+  validation + `resolveSegment`). **`examDefaulted` is always `false`**: the send has no
+  default exam (no `exam` = every user in every exam), so `true` would make the portal show
+  "UPSC (default)" over an all-exams audience. Internal accounts are counted (the send
+  reaches them).
+
+Staging proof (read-only, 15 users): the real `countSegment` = an independent hand SQL for
+every scope × cohort — no exam 5 / 0 / 10, `upsc-cse` 2 / 0 / 11, `appsc-group-1` 0 / 0 / 2
+(premium / trial / free; staging has nobody in a trial today, so `trial` = 0 — B3.2 proved
+`resolveSegment` at four instants); the real `listUsers` `platform=none` total 10 = hand SQL.
+
+### B6.5 What the portal lanes must do (checklist)
+
+1. **P2 engagement explorer** (`/sme/analytics/users`): drop "Actions"; show `daysStudied`,
+   `sessions`, `minutesInApp` with the window label. Do not relabel `daysStudied` as "days
+   active" — it is days with a study action.
+2. **Every `/sme/analytics/*` call**: plain `YYYY-MM-DD` now works for `startDate`/`endDate`;
+   the `+05:30` instants may stay. A bad date is now a 400 — show it, do not swallow it.
+3. **P3 users list**: the Push-device filter can offer "No push device" → `platform=none`;
+   remove the FastAPI guard that rejects it (`app/main.py` `_sme_users_params`: "there is
+   no 'no push device' filter upstream").
+4. **P4 push composer**: before Send, call `GET /sme/notifications/segment/count` with the same
+   `segment` + `exam` and show "will reach N people (devices without push are counted but not
+   reached)". Never label the un-scoped count "UPSC".
+
+### B6.6 To verify after the staging deploy (HTTP)
+
+- `GET /sme/analytics/users?days=30&search=<a staging user>` → the row's
+  `sessions`/`minutesInApp` = `GET /sme/users/:id/snapshot?days=30` `timeInApp.sessions`/`minutes`
+  (both trailing 30 days from now; the snapshot takes only `days`). Call them back to back —
+  a sitting in progress between the two calls can move the numbers.
+- `GET /sme/analytics/signups?startDate=2026-09-01&endDate=2026-11-03` and the same with
+  `+05:30` instants → identical bodies; `?startDate=yesterday` → 400.
+- `GET /sme/users?platform=none&includeInternal=1` → total 10 (staging today);
+  `?platform=IOS` → 400.
+- `GET /sme/notifications/segment/count?segment=premium` → `{ "matchedUsers": 5, "segment":
+  "premium", "exam": null, "examDefaulted": false }`; `&exam=appsc-grp-1` → 400.

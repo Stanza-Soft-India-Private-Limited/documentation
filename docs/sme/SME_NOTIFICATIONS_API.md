@@ -1,6 +1,7 @@
 # SME — Push Notifications API Guide
 
 > Changed 2026-09-21 — per-exam broadcast, validated segment exam (+ fix), survey targetExams, feedback ?exam= (see [WHAT_CHANGED_2026-09-21.md](./WHAT_CHANGED_2026-09-21.md)).
+> Changed 2026-11-03 (lane B6) — `GET /sme/notifications/segment/count`: the segment send's audience size without sending (§3.2; see [WHAT_CHANGED_2026-11.md §B6](./WHAT_CHANGED_2026-11.md#b6--follow-ups-surfaced-by-the-portal-lanes-backend-lane-b6-2026-11-03)).
 
 End-to-end reference for the **SME portal** to send push notifications to PrepMonkey
 users — to **one user**, to **everyone**, to **one exam mode**, or to a **cohort**
@@ -314,6 +315,39 @@ staging, 2026-09-21 (backend `f6329e6`):
 > also unaffected: their clause has no `OR`.
 
 Everything else about the three segments is unchanged.
+
+### 3.2 Count a cohort before sending — `GET /sme/notifications/segment/count` (2026-11, B6.4)
+
+```
+GET /api/v1/sme/notifications/segment/count?segment=trial&exam=appsc-group-1
+x-api-key: <API_KEY_SECRET>
+```
+| Param | Req | Notes |
+|---|---|---|
+| segment | ✅ | `premium` \| `trial` \| `free` — anything else 400 |
+| exam | ➖ | as on the send (§3.1); unknown slug → 400. Omit = every user in every exam |
+
+**Response 200** — always these four keys:
+<!-- from DTO — replace after staging deploy (values: the real service method on staging, read-only, 2026-11-03) -->
+```json
+{ "matchedUsers": 0, "segment": "trial", "exam": "appsc-group-1", "examDefaulted": false }
+```
+
+- **Same rule as the send, by construction:** both routes call one service method (exam
+  validation + cohort resolution); the count stops before the fan-out. So at the same
+  moment `matchedUsers` here = the send's `matchedUsers`. **Nothing is sent, nothing is
+  audited.**
+- `exam` = the validated slug, or `null` when none was sent.
+- `examDefaulted` is **always `false`** — present for shape parity with the other SME
+  reads. The send has **no default exam**: without `exam` the cohort is every user in every
+  exam (`premium` = a live entitlement in **any** exam), **not** upsc-cse. Do not label an
+  un-scoped count "UPSC (default)".
+- `matchedUsers` counts **people**, not devices: someone with no active push token is
+  counted but the send cannot reach them (the send's `successCount`/`failureCount` are
+  device-level). `GET /sme/users?platform=none` lists those people.
+- Internal accounts (staff, store reviewers) **are** counted — the send reaches them too.
+- Staging, 2026-11-03 (read-only, the real method vs an independent hand SQL, 15 users):
+  no exam → premium 5 / trial 0 / free 10; `upsc-cse` → 2 / 0 / 11; `appsc-group-1` → 0 / 0 / 2.
 
 ---
 

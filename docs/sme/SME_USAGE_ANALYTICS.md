@@ -3,6 +3,7 @@
 > Changed 2026-09-21 — stale-text pass (telemetry live in 2.0, version ladder, links). Exam-dimension changes follow in [WHAT_CHANGED_2026-09-21.md](./WHAT_CHANGED_2026-09-21.md).
 > Changed 2026-09-21 — ?exam= on every analytics route, examCoverage, purchase-funnel (see [WHAT_CHANGED_2026-09-21.md](./WHAT_CHANGED_2026-09-21.md)).
 > Changed 2026-11-03 — `/summary` excludes internal accounts by default (`includeInternal`) and gains a per-exam `money` block; purchase-funnel reworked (see [WHAT_CHANGED_2026-11.md §B1](./WHAT_CHANGED_2026-11.md#b1--money-truth-contract-backend-lane-b1-2026-11-03) and [SME_INSIGHTS_API.md §5.1](./SME_INSIGHTS_API.md)).
+> Changed 2026-11-03 (lane B6) — `startDate`/`endDate` are IST calendar days on every route; `/users` rows gain `daysStudied`, `sessions`, `minutesInApp`; `paywall-hits`, `heatmap`, `premium-engagement` and `/users` now honour `endDate` (see [WHAT_CHANGED_2026-11.md §B6](./WHAT_CHANGED_2026-11.md#b6--follow-ups-surfaced-by-the-portal-lanes-backend-lane-b6-2026-11-03)).
 
 Dedicated read-only endpoints for the SME portal to render **Daily Active Users** and
 **per-user / per-feature engagement**. Server-to-server, same model as the rest of the SME
@@ -10,8 +11,14 @@ surface.
 
 **Base URL:** `{{BASE_URL}}/api/v1` (prod `https://app.stanzasoft.ai`)
 **Auth:** `x-api-key: <API_KEY_SECRET>` on every request · **Swagger:** `/api/docs` (group **SME**)
-**All endpoints** accept `?days=30` (default 30, max 120) and optional `?startDate=&endDate=` (ISO),
+**All endpoints** accept `?days=30` (default 30, max 120) and optional `?startDate=&endDate=`,
 plus an optional **`?exam=<slug>`** — see §0b, and read it before you draw a per-exam chart.
+**Dates (2026-11, lane B6.3):** a bare `YYYY-MM-DD` is an **IST calendar day** — `startDate`
+from that day's 00:00 IST, `endDate` through the **whole** end day (bound = next 00:00 IST,
+exclusive), so `startDate=endDate=D` is exactly day D. A full ISO timestamp is taken literally
+(inclusive), so the portal's `+05:30` instants keep working and land on the same bounds.
+Unparseable or `startDate` after `endDate` → `400`. (Until then `new Date(value)` read a bare
+date as UTC midnight = 05:30 IST and cut the end day off.)
 All day-bucketing is **IST** (UTC+5:30). Counts are integers; rates are percentages.
 
 ---
@@ -164,8 +171,28 @@ sandbox, unknown }` beside it. Field list and the portal cards it replaces:
 `?exam=` — PERSON. Despite reading the same six domain tables the DAU series does, this one has **full per-exam history**: no `api_usage`, so no `examCoverage` and no deploy-day floor.
 
 ### `GET /sme/analytics/users?days=30&page=1&limit=20&search=&sort=lastSeen`
-Paginated `{ data, total, page, limit, hasMore }`; rows `{ id, email, name, phoneNumber, premiumExpiresAt, lastSeen, actions30d, isPremium }`. `sort ∈ lastSeen|actions`; `search` matches email/name.
-`?exam=` — PERSON; narrows **both the page and `total`**. ⚠️ `isPremium` on these rows is still the person-level `premiumExpiresAt > now` mirror — it is **not** re-scoped to the exam. Use `GET /sme/users?premium=&exam=` when you need per-exam entitlement truth in a list.
+Paginated `{ data, total, page, limit, hasMore, windowDays, premiumExamId, examDefaulted, includeInternal }`;
+rows `{ id, email, name, phoneNumber, premiumExpiresAt, isPremium, lastSeen, actions30d, isInternal, daysStudied, sessions, minutesInApp }`.
+`sort ∈ lastSeen|actions`; `search` matches email/name.
+
+**Engagement fields (2026-11, lane B6.2)** — integers over the route's window (the same
+window as `actions30d`, which despite its name follows `days` / `startDate`–`endDate`),
+**always present**, `0` when nothing happened:
+
+| field | meaning |
+|---|---|
+| `sessions` | sittings: runs of this user's `api_usage` requests + `auth_events` client events with no gap over **30 min**. **Exactly** the profile's rule — `GET /sme/users/:id/snapshot` → `timeInApp.sessions` for the same window is the same number (one shared SQL builder). |
+| `minutesInApp` | Σ (last − first) per sitting, rounded. A one-request sitting counts 0, so this is a **floor** on foreground time. = the profile's `timeInApp.minutes`. |
+| `daysStudied` | distinct **IST** dates with a **study action** — the same tables `actions30d` counts (PYQ / MCQ attempts, document progress, simulations, notes/flashcards, own planner tasks, psychometric). ⚠️ Not the profile's `timeInApp.activeDays`, which counts days with **any** request or client event ("opened the app") and is ≥ this. |
+
+`api_usage` raw is kept 30 days, so on a longer window `sessions`/`minutesInApp` rest on
+`auth_events` alone for the older part (the profile flags this as `apiUsageCoveredFrom`).
+`actions30d` is kept for compatibility; the user explorer can show the three fields instead.
+
+`?exam=` — PERSON; narrows **both the page and `total`**. `isPremium` = a **live**
+`user_exam_entitlements` row in `exam` (in `upsc-cse` when no exam is sent —
+`premiumExamId` / `examDefaulted` say which); `premiumExpiresAt` stays the person-level
+mirror.
 
 ---
 
@@ -404,11 +431,12 @@ the chart above it; a window-wide distinct count would not add up to the series.
 
 - **Capture** (`ApiUsageInterceptor`): one row per *authenticated* request — `userId, method, route TEMPLATE (no IDs/query/body/PII), status, durationMs, createdAt`. Batched + fire-and-forget, so it adds ~zero request latency. Public / `x-api-key` / webhook routes (no user) are skipped.
 - **Rollup + purge** (BullMQ repeatable jobs, mirroring `payment-reconcile`): nightly `rollup` collapses raw rows into `api_usage_daily` (`day×user×route×count`); `purge` drops raw >30d and rollup >120d. So the tables are permanently bounded.
+  Both jobs are registered by `ApiUsageRollupService` itself and switched off only by `API_USAGE_ROLLUP_ENABLED=false` (independent of `NOTIFICATION_ENGINE_ENABLED`). **Staging sets it `false`** (`.env.staging`, docs/staging.md "Traps"), which is why staging's `api_usage_daily` is empty and its raw `api_usage` reaches back past 30 days — so on staging every rollup-sourced number (`endpoints`, the older part of `dau`'s `activeDau`) reads 0.
 - **Plane A** reads the app's live tables directly — nothing to maintain or purge there.
 
 ## 6. Caveats
 - `engagedDau` is a floor (browse-only sessions aren't counted); `activeDau` is the broader "any request" number once the capture has data.
-- `paywall-hits` and `heatmap` are raw-sourced → ~30-day window; everything else honours the full `days`/date range (Plane A: months; Plane B rollup: 120d).
+- `paywall-hits` and `heatmap` are raw-sourced → ~30-day window; everything else honours the full `days`/date range (Plane A: months; Plane B rollup: 120d). Until lane B6.3 `paywall-hits`, `heatmap`, `premium-engagement` and the `/users` `actions30d` read only the **start** of the window, so an `endDate` was ignored; they honour it now.
 - IST always (`days` boundaries resolve in IST).
 - **Exam (§0b):** without `?exam=` every number here is a **cross-exam total** — the app is multi-exam since 2026-08-25, so "users" means users of *all* exams. With `?exam=`, a PERSON-sourced number is retro-attributed to today's picked exam and a REQUEST-sourced number starts at `examCoverage.since`. Never put a per-exam number next to a pre-deploy all-exam number.
 - **`?exam=` also changes SHAPE on four routes** (`dau`, `paywall-hits`, `heatmap`, `endpoints`: bare array → `{ data, examCoverage }`) and changes the **meaning of "premium"** on `premium-engagement`.
