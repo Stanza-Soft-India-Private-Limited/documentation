@@ -1,5 +1,7 @@
 # SME Portal — Integration Docs
 
+> Changed 2026-11-03 — **[AUDIT_2026-11.md](./AUDIT_2026-11.md)**: the first audit of the live portal against this folder (map of every portal→backend call, TRUST / MEANING / GAP per screen, live pass, severity-ranked register, lane plan). Read it before changing anything the portal consumes. Production rolled `upsc:164` the same day (i18n + content-language migrations applied).
+
 > Changed 2026-10-30 — new [SME_CONTENT_LANGUAGE_API.md](./SME_CONTENT_LANGUAGE_API.md): a `language` on every content row (strict on `/sme/content/*`, lenient on `/cms/*` + content-doc-admin), `X-Lang` list filters, and per-language maps on paywall / campaign / filter-config / survey / notification-rule copy (`…ByLanguage` on the GETs). Staging only until production has `i18n_languages`.
 
 > Changed 2026-10-23 — new [SME_LOCALIZATION_API.md](./SME_LOCALIZATION_API.md): UI languages, translations and publish (`/sme/i18n/*`); `uiLanguage` on `/sme/users`; rollout in [rollout-and-verify.md](./rollout-and-verify.md) §9.
@@ -50,6 +52,8 @@ unchanged for shipped clients; new clients read the campaign banner out of `GET 
 
 | Doc | Exam status | Covers |
 |---|---|---|
+| [AUDIT_2026-11.md](./AUDIT_2026-11.md) | ✅ | **Portal audit 2026-11-03** — what the portal calls, which numbers are true, what explains nothing, what never reached it; 49-row issue register; lane plan B1–B4 / P1–P5 / D1. Appendices in [`audit-2026-11/`](./audit-2026-11/). |
+| [PYQ_MOBILE_CONTRACT_2026-10.md](./PYQ_MOBILE_CONTRACT_2026-10.md) | ✅ | App-side contract for PYQ figures, paper labels and board-withdrawn questions (2026-10); the portal cannot set these fields yet (audit K8). |
 | [WHAT_CHANGED_2026-09-21.md](./WHAT_CHANGED_2026-09-21.md) | ✅ | **Current cover note** — the exam dimension across every module, the two breaking calls (`POST /sme/offers` needs `examId`; `DELETE /sme/users/:id/premium` needs `?exam=`), five corrected defects, the per-module change list, the new endpoints, live 2.0 telemetry, and the gaps that remain |
 | [archive/WHAT_CHANGED_2026-07-23.md](./archive/WHAT_CHANGED_2026-07-23.md) | — | **Archived** — the July 2026 cover note. Bundle contents, contract corrections, null-vs-zero rules and the mandatory `frontend-design` brief; its production numbers are UPSC-only and dated July, so read it for history only |
 | [SME_PORTAL_API.md](./SME_PORTAL_API.md) | ✅ | Master guide — users, transactions, blogs, notifications (summary), premium grant/revoke. Now: the two exam axes on `/sme/users` (who they **are** vs what they **hold**), `entitlements[]` on list/detail, `?exam=` on users and orders, `reconcileHint` (`OK` / `GRANT_PENDING` / `UNRESOLVED_EXAM`) and the rule never to grant an unresolved-exam order. 🔴 **`DELETE /sme/users/:id/premium` now requires `?exam=<slug>` or `?exam=all`** |
