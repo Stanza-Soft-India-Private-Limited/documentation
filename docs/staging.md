@@ -783,8 +783,9 @@ done | sort -u | wc -l
 curl -sS -X PATCH "$STG/api/v1/sme/exams/upsc-cse" -H "x-api-key: $KEY" -H "$H" \
   -d '{"featureFlagsByLanguage":{"hi":{"mains":false}}}' | jq '.featureFlagsByLanguage'
 sleep 65                                  # catalogue snapshot is 60 s PER REPLICA
-curl -sS -H "$A" -H 'X-Lang: hi' "$STG/api/v1/config" | jq '.features.mains'
-curl -sS -H "$A" "$STG/api/v1/config" | jq '.features.mains'
+# `/config` is excluded from the `api/v1` global prefix (src/main.ts), so it is served bare.
+curl -sS -H "$A" -H 'X-Lang: hi' "$STG/config" | jq '.features.mains'
+curl -sS -H "$A" "$STG/config" | jq '.features.mains'
 ```
 
 ✅ **Expected:** PATCH echoes `{"hi":{"mains":false}}`; then `false` with `X-Lang: hi`, and `true`
