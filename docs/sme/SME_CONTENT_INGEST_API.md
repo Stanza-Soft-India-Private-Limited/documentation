@@ -965,7 +965,8 @@ Changed 2026-11-03 (lane B4.6, audit K4) — **per-row**, no longer all-or-nothi
 3. **Each row is judged on its own.** Checked per row: `examIds`, `language`, the PYQ
    answer key (§9.2 — one uppercase A–E letter, or `null` with `boardDeleted: true`) and
    `year` (an integer from 1950 to next year — a blank Excel Year cell used to arrive as
-   `0`). The rows that pass are written in **one** transaction with their ids assigned up
+   `0`), and the **maths** in every text field (§11 — `items[i].<field>: <reason> near <span>`).
+   The rows that pass are written in **one** transaction with their ids assigned up
    front, so `results[i].id` is the stored row; the rows that fail are listed with an
    `items[i]: …` sentence. **Check `rejected` — a `201` can carry rejected rows.**
 4. **Every row rejected → `400`**, `message` = the list of row errors, nothing written.
@@ -1029,9 +1030,13 @@ curl -H "x-api-key: $API_KEY_SECRET" \
   "{{BASE_URL}}/api/v1/sme/content/pyq?exam=appsc-group-1&limit=5"
 ```
 
+For a non-English load, add **`?language=<code>`** (e.g. `?language=hi`): only rows written
+in that content language are counted and the body gains `"language"`. An unknown code is a
+`400`; without the param the response is unchanged.
+
 Full field semantics for `content-counts` are in
 [SME_EXAMS_API.md](./SME_EXAMS_API.md) §2; the launch checklist that wraps this step is §6
-of the same doc.
+of the same doc, and per-language feature flags are §7.1.
 
 ---
 
@@ -1063,6 +1068,7 @@ still keyless-only, on purpose:
 | `400` | `correctAnswer must be a single option letter A–E, or null for a question the board deleted (got "3").` | Send the **letter**, uppercase, not the option number (§9.2) |
 | `400` | `items[<i>]: year must be a real exam year between 1950 and <next year> (got 0).` | A bulk row's `year` is missing/0 — it is listed in `results[]`, the other rows still land (§4) |
 | `400` | `actor and reason are required: send {"actor": "<who is deleting>", "reason": "<why>"} in the body.` | Any keyed DELETE (§10.1) |
+| `400` | `<field>: <reason> near <span>` with `code: "INVALID_MATH"`, `field`, `span` | Unparsable / unsupported maths in a question-text field (§11). On bulk the field is `items[<i>].<field>` |
 | `401` | — | Missing or wrong `x-api-key` |
 | `404` | `<Resource> not found` | The `:id` does not exist |
 
@@ -1314,3 +1320,69 @@ Every row key is always present (`null` when the writer did not record it). `GET
 have no `bank` key; it is derived from the action (blogs) or the `/sme/content/<bank>` route.
 Edits (PATCH/create) carry **no actor** — attributing them needs the portal to send one on
 writes, which is an open owner decision (audit S08 §A.4 last row).
+
+---
+
+## 11. Maths in question text — `400 INVALID_MATH` (2026-11-11, math-text v1)
+
+Formulas are written as LaTeX **inside the existing text fields**: `$…$` / `\(…\)` inline,
+`$$…$$` display, and `\[…\]` display **only when alone on its line(s)**. The full grammar,
+the plain-text fallback and the test vectors are the normative contract
+[`docs/contracts/math-text-v1.md`](../contracts/math-text-v1.md).
+
+**Authoring rule — write currency as `\$`.** `$` pairs pandoc-strictly: `Price $5 and area $x^2$`
+is ONE maths span (`5 and area $x^2`). Write `Price \$5 and area $x^2$`. A lone `$5` with no
+second `$` on the line is plain text and is accepted.
+
+### 11.1 What is checked
+
+Every write that stores question text validates the maths in these fields:
+
+| Bank | Fields |
+|---|---|
+| PYQ (`/sme/content/pyq*`, `/cms/pyq*`, JWT `/pyq`) | `question`, `optionA`–`optionE`, `answerExplanation`, `solveTip` |
+| Mains (`/sme/content/mains*`, `/cms/mains*`, JWT `/mains`) | `question`, `answer` (model answer), `answerExplanation`, `solveTip` |
+| Simulation questions (`/sme/content/simulations/questions/bulk`, `/cms/simulations/questions/bulk`) | `question`, `optionA`–`optionD`, `explanation` |
+| Content-document quizzes (`/sme/content/docs*`, `/content-doc-admin*`) | each parsed quiz question's `questionText`, `optionA`–`optionD`, `explanation` |
+
+Checks, in order (first failure wins): a form feed U+000C anywhere (the JSON trap: `"\frac"`
+in hand-built JSON decodes to a form feed + `rac` — escape it as `"\\frac"`); an unclosed or
+empty `$$`, `\(` or `\[` opener; unbalanced `{}` inside a maths span; a strict KaTeX parse
+(Unicode symbols such as `–`, `₹` inside maths are fine; Unicode letters such as Devanagari are
+not); and no command the mobile engine refuses (macro definitions `\def`/`\newcommand`, links and
+images `\href`/`\url`/`\includegraphics`, `\html*` — `MATH_ALLOWLIST_EXCLUDED` in
+`src/common/math/math-allowlist.ts`). Any other KaTeX command (`\tan`, `\max` …) is accepted;
+`\ce{…}` / `\pu{…}` chemistry is allowed.
+
+**Only what an edit CHANGES is checked.** A `PATCH` validates a field only when its value
+differs from the stored one, so re-saving a legacy row with an unrelated edit never 400s on text
+nobody touched. A content-document re-sync checks a quiz field only when that exact text is not
+already stored on one of the document's questions.
+
+### 11.2 The error
+
+```jsonc
+// 400
+{
+  "success": false,
+  "message": "optionB: unbalanced braces near $\\frac{a}{b$",
+  "error": "Bad Request",
+  "code": "INVALID_MATH",
+  "field": "optionB",
+  "span": "$\\frac{a}{b$",
+  "statusCode": 400,
+  "timestamp": "…", "path": "/sme/content/pyq", "method": "POST"
+}
+```
+
+- `field` — the field name; `items[<i>].<field>` on a bulk row; for a content document
+  `sections[<order>].questions[<i>].<field>`.
+- `span` — the offending maths **including its delimiters**, at most 60 characters (`…` when cut).
+- `message` — always `<field>: <reason> near <span>`, so a client that only reads `message`
+  (the portal proxy flattens errors to it) still shows field and span.
+
+**Bulk.** `/sme/content/{pyq,mains}/bulk` treat a maths failure like any other per-row check
+(§4): the row is listed as rejected with that sentence and the other rows are written.
+`/sme/content/simulations/questions/bulk` and every `/cms/*/bulk` route are all-or-nothing:
+the first bad row is a `400` naming `items[<i>].<field>` and **nothing** is written.
+

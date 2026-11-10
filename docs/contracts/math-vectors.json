@@ -1,0 +1,1692 @@
+{
+  "version": 1,
+  "vectors": [
+    {
+      "id": "empty",
+      "input": "",
+      "segments": [],
+      "plainText": "",
+      "note": "Empty string yields no segments."
+    },
+    {
+      "id": "plain-sentence",
+      "input": "The Constitution of India came into force in 1950.",
+      "segments": [
+        {
+          "kind": "text",
+          "value": "The Constitution of India came into force in 1950."
+        }
+      ],
+      "plainText": "The Constitution of India came into force in 1950.",
+      "note": "Fast path: no $, \\(, \\[."
+    },
+    {
+      "id": "plain-markdown",
+      "input": "**Key points**\n- Item one\n- Item two",
+      "segments": [
+        {
+          "kind": "text",
+          "value": "**Key points**\n- Item one\n- Item two"
+        }
+      ],
+      "plainText": "**Key points**\n- Item one\n- Item two",
+      "note": "Markdown untouched; newlines kept."
+    },
+    {
+      "id": "numbered-stem-asterisk",
+      "input": "Consider the following:\n1. 3 * 4 = 12\n2. 5 * 2 = 10\nWhich is correct?",
+      "segments": [
+        {
+          "kind": "text",
+          "value": "Consider the following:\n1. 3 * 4 = 12\n2. 5 * 2 = 10\nWhich is correct?"
+        }
+      ],
+      "plainText": "Consider the following:\n1. 3 * 4 = 12\n2. 5 * 2 = 10\nWhich is correct?",
+      "note": "Stem numbering and * as an operator stay text."
+    },
+    {
+      "id": "markdown-escapes-outside-maths",
+      "input": "1\\. Not a list \\*really\\*",
+      "segments": [
+        {
+          "kind": "text",
+          "value": "1\\. Not a list \\*really\\*"
+        }
+      ],
+      "plainText": "1\\. Not a list \\*really\\*",
+      "note": "Backslashes other than \\$ pass through untouched."
+    },
+    {
+      "id": "bare-frac-outside-delimiters",
+      "input": "(d) \\frac{k}{2} ❌ – Fails because halving the average would make the total less than 3k.",
+      "segments": [
+        {
+          "kind": "text",
+          "value": "(d) \\frac{k}{2} ❌ – Fails because halving the average would make the total less than 3k."
+        }
+      ],
+      "plainText": "(d) \\frac{k}{2} ❌ – Fails because halving the average would make the total less than 3k.",
+      "note": "Prod sample: an undelimited \\frac is text."
+    },
+    {
+      "id": "currency-billion",
+      "input": "mobilize at least $2 billion for nature-based solutions",
+      "segments": [
+        {
+          "kind": "text",
+          "value": "mobilize at least $2 billion for nature-based solutions"
+        }
+      ],
+      "plainText": "mobilize at least $2 billion for nature-based solutions",
+      "note": "Opener with no closer is text."
+    },
+    {
+      "id": "currency-two-amounts",
+      "input": "$100 and $50",
+      "segments": [
+        {
+          "kind": "text",
+          "value": "$100 and $50"
+        }
+      ],
+      "plainText": "$100 and $50",
+      "note": "Second $ preceded by a space cannot close."
+    },
+    {
+      "id": "currency-us",
+      "input": "US$5",
+      "segments": [
+        {
+          "kind": "text",
+          "value": "US$5"
+        }
+      ],
+      "plainText": "US$5",
+      "note": "No closer."
+    },
+    {
+      "id": "currency-space-after",
+      "input": "at a cost of $ 2.99?",
+      "segments": [
+        {
+          "kind": "text",
+          "value": "at a cost of $ 2.99?"
+        }
+      ],
+      "plainText": "at a cost of $ 2.99?",
+      "note": "Space after $ cannot open."
+    },
+    {
+      "id": "currency-range-dash",
+      "input": "costs $5-$10",
+      "segments": [
+        {
+          "kind": "text",
+          "value": "costs $5-$10"
+        }
+      ],
+      "plainText": "costs $5-$10",
+      "note": "Candidate closer followed by a digit cannot close."
+    },
+    {
+      "id": "currency-or",
+      "input": "$5 or $6",
+      "segments": [
+        {
+          "kind": "text",
+          "value": "$5 or $6"
+        }
+      ],
+      "plainText": "$5 or $6",
+      "note": "Candidate closer preceded by a space."
+    },
+    {
+      "id": "digits-after-closer",
+      "input": "$5$10",
+      "segments": [
+        {
+          "kind": "text",
+          "value": "$5$10"
+        }
+      ],
+      "plainText": "$5$10",
+      "note": "Closing $ followed by a digit is not a closer."
+    },
+    {
+      "id": "unclosed-display",
+      "input": "Cost $$5",
+      "segments": [
+        {
+          "kind": "text",
+          "value": "Cost $$5"
+        }
+      ],
+      "plainText": "Cost $$5",
+      "note": "A $$ without a closing $$ is text."
+    },
+    {
+      "id": "empty-display",
+      "input": "$$ $$",
+      "segments": [
+        {
+          "kind": "text",
+          "value": "$$ $$"
+        }
+      ],
+      "plainText": "$$ $$",
+      "note": "Whitespace-only content is not maths."
+    },
+    {
+      "id": "escaped-dollars",
+      "input": "\\$5 and \\$7",
+      "segments": [
+        {
+          "kind": "text",
+          "value": "$5 and $7"
+        }
+      ],
+      "plainText": "$5 and $7",
+      "note": "\\$ is a literal $ and never opens."
+    },
+    {
+      "id": "escaped-then-inline",
+      "input": "\\$5 costs $x$",
+      "segments": [
+        {
+          "kind": "text",
+          "value": "$5 costs "
+        },
+        {
+          "kind": "inline",
+          "value": "x"
+        }
+      ],
+      "plainText": "$5 costs x",
+      "note": "Escape, then real maths."
+    },
+    {
+      "id": "escaped-inside-inline",
+      "input": "$\\$5$",
+      "segments": [
+        {
+          "kind": "inline",
+          "value": "\\$5"
+        }
+      ],
+      "plainText": "$5",
+      "note": "A $ preceded by \\ never closes; \\$ in maths converts to $."
+    },
+    {
+      "id": "maths-24000",
+      "input": "$24,000$",
+      "segments": [
+        {
+          "kind": "inline",
+          "value": "24,000"
+        }
+      ],
+      "plainText": "24,000",
+      "note": "Prod pattern from the explanation pipeline."
+    },
+    {
+      "id": "maths-Q",
+      "input": "$Q$",
+      "segments": [
+        {
+          "kind": "inline",
+          "value": "Q"
+        }
+      ],
+      "plainText": "Q",
+      "note": "Single letter."
+    },
+    {
+      "id": "maths-5",
+      "input": "$5$",
+      "segments": [
+        {
+          "kind": "inline",
+          "value": "5"
+        }
+      ],
+      "plainText": "5",
+      "note": "Single digit."
+    },
+    {
+      "id": "inline-x2",
+      "input": "Area is $x^2$ units",
+      "segments": [
+        {
+          "kind": "text",
+          "value": "Area is "
+        },
+        {
+          "kind": "inline",
+          "value": "x^2"
+        },
+        {
+          "kind": "text",
+          "value": " units"
+        }
+      ],
+      "plainText": "Area is x² units",
+      "note": "Superscript digit."
+    },
+    {
+      "id": "display-sum-own-lines",
+      "input": "Sum:\n$$\n\\sum_{i=1}^{n} i^2\n$$\nDone.",
+      "segments": [
+        {
+          "kind": "text",
+          "value": "Sum:\n"
+        },
+        {
+          "kind": "display",
+          "value": "\n\\sum_{i=1}^{n} i^2\n"
+        },
+        {
+          "kind": "text",
+          "value": "\nDone."
+        }
+      ],
+      "plainText": "Sum:\n∑_(i=1)ⁿ i²\nDone.",
+      "note": "Display value is not trimmed; plain text is. i has no subscript glyph."
+    },
+    {
+      "id": "display-sum-across-lines",
+      "input": "$$\\sum_{i=1}^{n}\ni^2$$",
+      "segments": [
+        {
+          "kind": "display",
+          "value": "\\sum_{i=1}^{n}\ni^2"
+        }
+      ],
+      "plainText": "∑_(i=1)ⁿ i²",
+      "note": "$$ may span lines; the newline becomes a space."
+    },
+    {
+      "id": "paren-inline",
+      "input": "\\(a+b\\)",
+      "segments": [
+        {
+          "kind": "inline",
+          "value": "a+b"
+        }
+      ],
+      "plainText": "a+b",
+      "note": "\\( \\) is inline."
+    },
+    {
+      "id": "bracket-display",
+      "input": "\\[\\frac{a}{b}\\]",
+      "segments": [
+        {
+          "kind": "display",
+          "value": "\\frac{a}{b}"
+        }
+      ],
+      "plainText": "a/b",
+      "note": "\\[ \\] is display."
+    },
+    {
+      "id": "bracket-multiline",
+      "input": "\\[\na+b\n\\]",
+      "segments": [
+        {
+          "kind": "display",
+          "value": "\na+b\n"
+        }
+      ],
+      "plainText": "a+b",
+      "note": "\\[ may span lines."
+    },
+    {
+      "id": "bracket-own-line",
+      "input": "Solve:\n\\[x^2 = 4\\]\nso x = 2.",
+      "segments": [
+        {
+          "kind": "text",
+          "value": "Solve:\n"
+        },
+        {
+          "kind": "display",
+          "value": "x^2 = 4"
+        },
+        {
+          "kind": "text",
+          "value": "\nso x = 2."
+        }
+      ],
+      "plainText": "Solve:\nx² = 4\nso x = 2.",
+      "note": "Ruling 21: \\[ \\] alone on its line is display."
+    },
+    {
+      "id": "bracket-leading-spaces",
+      "input": "  \\[a+b\\]",
+      "segments": [
+        {
+          "kind": "text",
+          "value": "  "
+        },
+        {
+          "kind": "display",
+          "value": "a+b"
+        }
+      ],
+      "plainText": "  a+b",
+      "note": "Ruling 21: leading whitespace before \\[ is allowed."
+    },
+    {
+      "id": "bracket-indent-trailing-ws",
+      "input": "Text\n\t\\[\\pi r^2\\]  \nend",
+      "segments": [
+        {
+          "kind": "text",
+          "value": "Text\n\t"
+        },
+        {
+          "kind": "display",
+          "value": "\\pi r^2"
+        },
+        {
+          "kind": "text",
+          "value": "  \nend"
+        }
+      ],
+      "plainText": "Text\n\tπ r²  \nend",
+      "note": "Ruling 21: whitespace either side on the line is allowed."
+    },
+    {
+      "id": "bracket-two-line",
+      "input": "\\[ a +\n b \\]",
+      "segments": [
+        {
+          "kind": "display",
+          "value": " a +\n b "
+        }
+      ],
+      "plainText": "a + b",
+      "note": "Ruling 21: opener and closer on different lines, each anchored."
+    },
+    {
+      "id": "bracket-crlf",
+      "input": "a\r\n\\[x\\]\r\nb",
+      "segments": [
+        {
+          "kind": "text",
+          "value": "a\r\n"
+        },
+        {
+          "kind": "display",
+          "value": "x"
+        },
+        {
+          "kind": "text",
+          "value": "\r\nb"
+        }
+      ],
+      "plainText": "a\r\nx\r\nb",
+      "note": "Ruling 21: CR and LF both end a line."
+    },
+    {
+      "id": "bracket-mid-line",
+      "input": "see \\[x\\] here",
+      "segments": [
+        {
+          "kind": "text",
+          "value": "see \\[x\\] here"
+        }
+      ],
+      "plainText": "see \\[x\\] here",
+      "note": "Ruling 21: mid-line \\[ \\] is text."
+    },
+    {
+      "id": "bracket-mid-line-closer-at-eol",
+      "input": "Value \\[x\\]",
+      "segments": [
+        {
+          "kind": "text",
+          "value": "Value \\[x\\]"
+        }
+      ],
+      "plainText": "Value \\[x\\]",
+      "note": "Ruling 21: the opener is not first on its line."
+    },
+    {
+      "id": "bracket-trailing-text",
+      "input": "\\[x+1\\] is the answer",
+      "segments": [
+        {
+          "kind": "text",
+          "value": "\\[x+1\\] is the answer"
+        }
+      ],
+      "plainText": "\\[x+1\\] is the answer",
+      "note": "Ruling 21: \\[ starts the line but \\] is followed by text."
+    },
+    {
+      "id": "bracket-reference",
+      "input": "\\[1\\] Reference: NCERT Class XI",
+      "segments": [
+        {
+          "kind": "text",
+          "value": "\\[1\\] Reference: NCERT Class XI"
+        }
+      ],
+      "plainText": "\\[1\\] Reference: NCERT Class XI",
+      "note": "Ruling 21: citation-style escaped brackets stay text."
+    },
+    {
+      "id": "two-inline-one-line",
+      "input": "$a$ and $b$",
+      "segments": [
+        {
+          "kind": "inline",
+          "value": "a"
+        },
+        {
+          "kind": "text",
+          "value": " and "
+        },
+        {
+          "kind": "inline",
+          "value": "b"
+        }
+      ],
+      "plainText": "a and b",
+      "note": "Two spans on one line."
+    },
+    {
+      "id": "mixed-delimiters",
+      "input": "$a$, \\(b\\) and $$c$$",
+      "segments": [
+        {
+          "kind": "inline",
+          "value": "a"
+        },
+        {
+          "kind": "text",
+          "value": ", "
+        },
+        {
+          "kind": "inline",
+          "value": "b"
+        },
+        {
+          "kind": "text",
+          "value": " and "
+        },
+        {
+          "kind": "display",
+          "value": "c"
+        }
+      ],
+      "plainText": "a, b and c",
+      "note": "All four forms."
+    },
+    {
+      "id": "space-after-opener",
+      "input": "$ x$",
+      "segments": [
+        {
+          "kind": "text",
+          "value": "$ x$"
+        }
+      ],
+      "plainText": "$ x$",
+      "note": "Opening $ must be followed by non-space."
+    },
+    {
+      "id": "space-before-closer",
+      "input": "$x $",
+      "segments": [
+        {
+          "kind": "text",
+          "value": "$x $"
+        }
+      ],
+      "plainText": "$x $",
+      "note": "Closing $ must be preceded by non-space."
+    },
+    {
+      "id": "tab-after-opener",
+      "input": "$\tx$",
+      "segments": [
+        {
+          "kind": "text",
+          "value": "$\tx$"
+        }
+      ],
+      "plainText": "$\tx$",
+      "note": "Tab is whitespace."
+    },
+    {
+      "id": "nbsp-after-opener",
+      "input": "$ x$",
+      "segments": [
+        {
+          "kind": "text",
+          "value": "$ x$"
+        }
+      ],
+      "plainText": "$ x$",
+      "note": "NBSP is whitespace."
+    },
+    {
+      "id": "unbalanced-open",
+      "input": "$x^2",
+      "segments": [
+        {
+          "kind": "text",
+          "value": "$x^2"
+        }
+      ],
+      "plainText": "$x^2",
+      "note": "Opener without closer."
+    },
+    {
+      "id": "inline-no-newline",
+      "input": "$a\nb$",
+      "segments": [
+        {
+          "kind": "text",
+          "value": "$a\nb$"
+        }
+      ],
+      "plainText": "$a\nb$",
+      "note": "Inline $ cannot cross a newline."
+    },
+    {
+      "id": "paren-no-newline",
+      "input": "\\(a\nb\\)",
+      "segments": [
+        {
+          "kind": "text",
+          "value": "\\(a\nb\\)"
+        }
+      ],
+      "plainText": "\\(a\nb\\)",
+      "note": "Inline \\( cannot cross a newline; both delimiters stay as text."
+    },
+    {
+      "id": "hindi-digit-after-closer",
+      "input": "$x$१",
+      "segments": [
+        {
+          "kind": "inline",
+          "value": "x"
+        },
+        {
+          "kind": "text",
+          "value": "१"
+        }
+      ],
+      "plainText": "x१",
+      "note": "Only ASCII 0-9 block a closer."
+    },
+    {
+      "id": "formfeed-after-opener",
+      "input": "$\frac{1}{2}$",
+      "segments": [
+        {
+          "kind": "text",
+          "value": "$\frac{1}{2}$"
+        }
+      ],
+      "plainText": "$\frac{1}{2}$",
+      "note": "JSON-mangled \\frac: FF is whitespace, so no maths (the validator rejects the FF)."
+    },
+    {
+      "id": "display-then-stray",
+      "input": "$$a$$b$$",
+      "segments": [
+        {
+          "kind": "display",
+          "value": "a"
+        },
+        {
+          "kind": "text",
+          "value": "b$$"
+        }
+      ],
+      "plainText": "ab$$",
+      "note": "Closer is the first $$; the trailing $$ has no closer."
+    },
+    {
+      "id": "dollar-inside-display",
+      "input": "$$a $ b$$",
+      "segments": [
+        {
+          "kind": "display",
+          "value": "a $ b"
+        }
+      ],
+      "plainText": "a $ b",
+      "note": "A single $ inside display is content."
+    },
+    {
+      "id": "no-nesting",
+      "input": "$a \\(b\\) c$",
+      "segments": [
+        {
+          "kind": "inline",
+          "value": "a \\(b\\) c"
+        }
+      ],
+      "plainText": "a \\(b\\) c",
+      "note": "Spans are opaque; unknown control symbols keep their source."
+    },
+    {
+      "id": "currency-then-maths-hazard",
+      "input": "Price $5 and area $x^2$",
+      "segments": [
+        {
+          "kind": "text",
+          "value": "Price "
+        },
+        {
+          "kind": "inline",
+          "value": "5 and area $x^2"
+        }
+      ],
+      "plainText": "Price 5 and area $x²",
+      "note": "Pandoc-strict consequence: currency followed by maths on one line pairs the wrong dollars. Authors must write \\$5."
+    },
+    {
+      "id": "maths-inside-bold",
+      "input": "**$x$**",
+      "segments": [
+        {
+          "kind": "text",
+          "value": "**"
+        },
+        {
+          "kind": "inline",
+          "value": "x"
+        },
+        {
+          "kind": "text",
+          "value": "**"
+        }
+      ],
+      "plainText": "**x**",
+      "note": "Maths extracted before markdown."
+    },
+    {
+      "id": "devanagari-around-maths",
+      "input": "मान लीजिए $x^2 + y^2 = z^2$ है",
+      "segments": [
+        {
+          "kind": "text",
+          "value": "मान लीजिए "
+        },
+        {
+          "kind": "inline",
+          "value": "x^2 + y^2 = z^2"
+        },
+        {
+          "kind": "text",
+          "value": " है"
+        }
+      ],
+      "plainText": "मान लीजिए x² + y² = z² है",
+      "note": "Devanagari text around maths."
+    },
+    {
+      "id": "markdown-list-line",
+      "input": "- Speed is $\\frac{d}{t}$ km/h",
+      "segments": [
+        {
+          "kind": "text",
+          "value": "- Speed is "
+        },
+        {
+          "kind": "inline",
+          "value": "\\frac{d}{t}"
+        },
+        {
+          "kind": "text",
+          "value": " km/h"
+        }
+      ],
+      "plainText": "- Speed is d/t km/h",
+      "note": "List line with maths."
+    },
+    {
+      "id": "stem-with-image",
+      "input": "Look at the figure.\n\n![fig](https://example.com/a.png)\n\nFind $x$.",
+      "segments": [
+        {
+          "kind": "text",
+          "value": "Look at the figure.\n\n![fig](https://example.com/a.png)\n\nFind "
+        },
+        {
+          "kind": "inline",
+          "value": "x"
+        },
+        {
+          "kind": "text",
+          "value": "."
+        }
+      ],
+      "plainText": "Look at the figure.\n\n![fig](https://example.com/a.png)\n\nFind x.",
+      "note": "Image markdown stays in text."
+    },
+    {
+      "id": "nested-braces",
+      "input": "$\\frac{\\sqrt{a}}{b+c}$",
+      "segments": [
+        {
+          "kind": "inline",
+          "value": "\\frac{\\sqrt{a}}{b+c}"
+        }
+      ],
+      "plainText": "√a/(b+c)",
+      "note": "Denominator has an operator so it is wrapped."
+    },
+    {
+      "id": "ce-water",
+      "input": "$\\ce{H2O}$",
+      "segments": [
+        {
+          "kind": "inline",
+          "value": "\\ce{H2O}"
+        }
+      ],
+      "plainText": "H2O",
+      "note": "\\ce -> raw content."
+    },
+    {
+      "id": "ce-reaction",
+      "input": "$\\ce{2H2 + O2 -> 2H2O}$",
+      "segments": [
+        {
+          "kind": "inline",
+          "value": "\\ce{2H2 + O2 -> 2H2O}"
+        }
+      ],
+      "plainText": "2H2 + O2 -> 2H2O",
+      "note": "\\ce content is not converted."
+    },
+    {
+      "id": "text-km",
+      "input": "$\\text{km}$",
+      "segments": [
+        {
+          "kind": "inline",
+          "value": "\\text{km}"
+        }
+      ],
+      "plainText": "km",
+      "note": "\\text -> content."
+    },
+    {
+      "id": "thin-space-text",
+      "input": "$10\\,\\text{km}$",
+      "segments": [
+        {
+          "kind": "inline",
+          "value": "10\\,\\text{km}"
+        }
+      ],
+      "plainText": "10 km",
+      "note": "\\, -> space."
+    },
+    {
+      "id": "greek",
+      "input": "$\\alpha + \\beta = \\gamma$",
+      "segments": [
+        {
+          "kind": "inline",
+          "value": "\\alpha + \\beta = \\gamma"
+        }
+      ],
+      "plainText": "α + β = γ",
+      "note": "Greek."
+    },
+    {
+      "id": "greek-upper",
+      "input": "$\\Delta x = \\pi r$",
+      "segments": [
+        {
+          "kind": "inline",
+          "value": "\\Delta x = \\pi r"
+        }
+      ],
+      "plainText": "Δ x = π r",
+      "note": "Spaces in source are kept."
+    },
+    {
+      "id": "relations",
+      "input": "$a \\le b \\ne c \\ge d$",
+      "segments": [
+        {
+          "kind": "inline",
+          "value": "a \\le b \\ne c \\ge d"
+        }
+      ],
+      "plainText": "a ≤ b ≠ c ≥ d",
+      "note": "Relations."
+    },
+    {
+      "id": "operators",
+      "input": "$3 \\times 4 \\div 2 \\pm 1$",
+      "segments": [
+        {
+          "kind": "inline",
+          "value": "3 \\times 4 \\div 2 \\pm 1"
+        }
+      ],
+      "plainText": "3 × 4 ÷ 2 ± 1",
+      "note": "Binary operators."
+    },
+    {
+      "id": "cdot-approx",
+      "input": "$x \\cdot y \\approx 2$",
+      "segments": [
+        {
+          "kind": "inline",
+          "value": "x \\cdot y \\approx 2"
+        }
+      ],
+      "plainText": "x · y ≈ 2",
+      "note": "cdot, approx."
+    },
+    {
+      "id": "no-space-after-command",
+      "input": "$a\\times b$",
+      "segments": [
+        {
+          "kind": "inline",
+          "value": "a\\times b"
+        }
+      ],
+      "plainText": "a× b",
+      "note": "The converter never invents or swallows spaces."
+    },
+    {
+      "id": "limit",
+      "input": "$\\lim_{x \\to \\infty} f(x)$",
+      "segments": [
+        {
+          "kind": "inline",
+          "value": "\\lim_{x \\to \\infty} f(x)"
+        }
+      ],
+      "plainText": "lim_(x → ∞) f(x)",
+      "note": "Function name, arrow, infinity."
+    },
+    {
+      "id": "integral",
+      "input": "$\\int_0^1 x\\,dx$",
+      "segments": [
+        {
+          "kind": "inline",
+          "value": "\\int_0^1 x\\,dx"
+        }
+      ],
+      "plainText": "∫₀¹ x dx",
+      "note": "Digit sub/superscripts."
+    },
+    {
+      "id": "product",
+      "input": "$\\prod_{k=1}^{3} k$",
+      "segments": [
+        {
+          "kind": "inline",
+          "value": "\\prod_{k=1}^{3} k"
+        }
+      ],
+      "plainText": "∏_(k=1)³ k",
+      "note": "k has no subscript glyph."
+    },
+    {
+      "id": "sqrt-simple",
+      "input": "$\\sqrt{x}$",
+      "segments": [
+        {
+          "kind": "inline",
+          "value": "\\sqrt{x}"
+        }
+      ],
+      "plainText": "√x",
+      "note": "Single char not wrapped."
+    },
+    {
+      "id": "sqrt-sum",
+      "input": "$\\sqrt{x+1}$",
+      "segments": [
+        {
+          "kind": "inline",
+          "value": "\\sqrt{x+1}"
+        }
+      ],
+      "plainText": "√(x+1)",
+      "note": "Wrapped."
+    },
+    {
+      "id": "sqrt-number",
+      "input": "$\\sqrt{144} = 12$",
+      "segments": [
+        {
+          "kind": "inline",
+          "value": "\\sqrt{144} = 12"
+        }
+      ],
+      "plainText": "√144 = 12",
+      "note": "Digits not wrapped."
+    },
+    {
+      "id": "sqrt-cube",
+      "input": "$\\sqrt[3]{8} = 2$",
+      "segments": [
+        {
+          "kind": "inline",
+          "value": "\\sqrt[3]{8} = 2"
+        }
+      ],
+      "plainText": "∛8 = 2",
+      "note": "Cube root."
+    },
+    {
+      "id": "sqrt-nth",
+      "input": "$\\sqrt[n]{x}$",
+      "segments": [
+        {
+          "kind": "inline",
+          "value": "\\sqrt[n]{x}"
+        }
+      ],
+      "plainText": "ⁿ√x",
+      "note": "Index via superscript map."
+    },
+    {
+      "id": "frac-numerator-sum",
+      "input": "$\\frac{a+b}{2}$",
+      "segments": [
+        {
+          "kind": "inline",
+          "value": "\\frac{a+b}{2}"
+        }
+      ],
+      "plainText": "(a+b)/2",
+      "note": "Numerator wrapped."
+    },
+    {
+      "id": "frac-shorthand",
+      "input": "$\\frac12$",
+      "segments": [
+        {
+          "kind": "inline",
+          "value": "\\frac12"
+        }
+      ],
+      "plainText": "1/2",
+      "note": "Single-token arguments."
+    },
+    {
+      "id": "frac-missing-arg",
+      "input": "$\\frac{a}$",
+      "segments": [
+        {
+          "kind": "inline",
+          "value": "\\frac{a}"
+        }
+      ],
+      "plainText": "\\frac{a}",
+      "note": "Missing argument -> whole source."
+    },
+    {
+      "id": "unbalanced-braces",
+      "input": "$\\frac{a}{b$",
+      "segments": [
+        {
+          "kind": "inline",
+          "value": "\\frac{a}{b"
+        }
+      ],
+      "plainText": "\\frac{a}{b",
+      "note": "Unbalanced braces -> whole source (the validator rejects it)."
+    },
+    {
+      "id": "sup-negative",
+      "input": "$x^{-1}$",
+      "segments": [
+        {
+          "kind": "inline",
+          "value": "x^{-1}"
+        }
+      ],
+      "plainText": "x⁻¹",
+      "note": "Superscript minus."
+    },
+    {
+      "id": "sup-n-plus-1",
+      "input": "$x^{n+1}$",
+      "segments": [
+        {
+          "kind": "inline",
+          "value": "x^{n+1}"
+        }
+      ],
+      "plainText": "xⁿ⁺¹",
+      "note": "n and + have glyphs."
+    },
+    {
+      "id": "sup-letter",
+      "input": "$e^{x}$",
+      "segments": [
+        {
+          "kind": "inline",
+          "value": "e^{x}"
+        }
+      ],
+      "plainText": "e^x",
+      "note": "No glyph for x; one char not wrapped."
+    },
+    {
+      "id": "sup-multi",
+      "input": "$e^{2x}$",
+      "segments": [
+        {
+          "kind": "inline",
+          "value": "e^{2x}"
+        }
+      ],
+      "plainText": "e^(2x)",
+      "note": "Mixed, longer than one char -> wrapped."
+    },
+    {
+      "id": "sup-tex-semantics",
+      "input": "$x^23$",
+      "segments": [
+        {
+          "kind": "inline",
+          "value": "x^23"
+        }
+      ],
+      "plainText": "x²3",
+      "note": "A script takes one token."
+    },
+    {
+      "id": "sup-padded-group",
+      "input": "$x^{ 2 }$",
+      "segments": [
+        {
+          "kind": "inline",
+          "value": "x^{ 2 }"
+        }
+      ],
+      "plainText": "x²",
+      "note": "Arguments are trimmed before mapping."
+    },
+    {
+      "id": "sub-digits",
+      "input": "$a_{12} + a_1$",
+      "segments": [
+        {
+          "kind": "inline",
+          "value": "a_{12} + a_1"
+        }
+      ],
+      "plainText": "a₁₂ + a₁",
+      "note": "Subscript digits."
+    },
+    {
+      "id": "sub-letter",
+      "input": "$a_n$",
+      "segments": [
+        {
+          "kind": "inline",
+          "value": "a_n"
+        }
+      ],
+      "plainText": "a_n",
+      "note": "No subscript glyph for n."
+    },
+    {
+      "id": "prime",
+      "input": "$f^{\\prime}(x)$",
+      "segments": [
+        {
+          "kind": "inline",
+          "value": "f^{\\prime}(x)"
+        }
+      ],
+      "plainText": "f′(x)",
+      "note": "Prime superscript is bare."
+    },
+    {
+      "id": "left-right",
+      "input": "$\\left( \\frac{1}{2} \\right)^2$",
+      "segments": [
+        {
+          "kind": "inline",
+          "value": "\\left( \\frac{1}{2} \\right)^2"
+        }
+      ],
+      "plainText": "( 1/2 )²",
+      "note": "\\left/\\right dropped, source spaces kept."
+    },
+    {
+      "id": "unknown-command",
+      "input": "$\\overline{AB} = 5$",
+      "segments": [
+        {
+          "kind": "inline",
+          "value": "\\overline{AB} = 5"
+        }
+      ],
+      "plainText": "\\overline{AB} = 5",
+      "note": "Unknown command keeps its source and its immediate groups."
+    },
+    {
+      "id": "unknown-environment",
+      "input": "$\\begin{pmatrix}1 & 2\\end{pmatrix}$",
+      "segments": [
+        {
+          "kind": "inline",
+          "value": "\\begin{pmatrix}1 & 2\\end{pmatrix}"
+        }
+      ],
+      "plainText": "\\begin{pmatrix}1 & 2\\end{pmatrix}",
+      "note": "Environments are unknown commands."
+    },
+    {
+      "id": "binom",
+      "input": "$\\binom{5}{2} = 10$",
+      "segments": [
+        {
+          "kind": "inline",
+          "value": "\\binom{5}{2} = 10"
+        }
+      ],
+      "plainText": "C(5,2) = 10",
+      "note": "binom."
+    },
+    {
+      "id": "mathbb",
+      "input": "$x \\in \\mathbb{R}$",
+      "segments": [
+        {
+          "kind": "inline",
+          "value": "x \\in \\mathbb{R}"
+        }
+      ],
+      "plainText": "x ∈ ℝ",
+      "note": "Blackboard R."
+    },
+    {
+      "id": "implies",
+      "input": "$p \\Rightarrow q$",
+      "segments": [
+        {
+          "kind": "inline",
+          "value": "p \\Rightarrow q"
+        }
+      ],
+      "plainText": "p ⇒ q",
+      "note": "Arrow."
+    },
+    {
+      "id": "percent-mixed-number",
+      "input": "$34 \\frac{2}{7}\\%$",
+      "segments": [
+        {
+          "kind": "inline",
+          "value": "34 \\frac{2}{7}\\%"
+        }
+      ],
+      "plainText": "34 2/7%",
+      "note": "Prod pattern: mixed number with \\%."
+    },
+    {
+      "id": "prod-expl-23",
+      "input": "Correct answer: Option (c) - $23$  \n\nKey Points:",
+      "segments": [
+        {
+          "kind": "text",
+          "value": "Correct answer: Option (c) - "
+        },
+        {
+          "kind": "inline",
+          "value": "23"
+        },
+        {
+          "kind": "text",
+          "value": "  \n\nKey Points:"
+        }
+      ],
+      "plainText": "Correct answer: Option (c) - 23  \n\nKey Points:",
+      "note": "PROD sample (pyq_papers answerExplanation, read-only 2026-11-11)."
+    },
+    {
+      "id": "prod-expl-rupees",
+      "input": "Correct answer: Option (a) - Rs. $24,000$ and Rs. $18,000$  \n\nKey Points:",
+      "segments": [
+        {
+          "kind": "text",
+          "value": "Correct answer: Option (a) - Rs. "
+        },
+        {
+          "kind": "inline",
+          "value": "24,000"
+        },
+        {
+          "kind": "text",
+          "value": " and Rs. "
+        },
+        {
+          "kind": "inline",
+          "value": "18,000"
+        },
+        {
+          "kind": "text",
+          "value": "  \n\nKey Points:"
+        }
+      ],
+      "plainText": "Correct answer: Option (a) - Rs. 24,000 and Rs. 18,000  \n\nKey Points:",
+      "note": "PROD sample (pyq_papers answerExplanation, read-only 2026-11-11)."
+    },
+    {
+      "id": "prod-expl-Q",
+      "input": "Correct answer: Option (b) - $Q$  \n\nKey Points:  \n- P and S are unmarried students, so the three professions (doctor, lawyer, artist) go to Q, R and T.",
+      "segments": [
+        {
+          "kind": "text",
+          "value": "Correct answer: Option (b) - "
+        },
+        {
+          "kind": "inline",
+          "value": "Q"
+        },
+        {
+          "kind": "text",
+          "value": "  \n\nKey Points:  \n- P and S are unmarried students, so the three professions (doctor, lawyer, artist) go to Q, R and T."
+        }
+      ],
+      "plainText": "Correct answer: Option (b) - Q  \n\nKey Points:  \n- P and S are unmarried students, so the three professions (doctor, lawyer, artist) go to Q, R and T.",
+      "note": "PROD sample (pyq_papers answerExplanation, read-only 2026-11-11)."
+    },
+    {
+      "id": "prod-expl-both",
+      "input": "Correct answer: Option (c) - Both $1$ and $2$",
+      "segments": [
+        {
+          "kind": "text",
+          "value": "Correct answer: Option (c) - Both "
+        },
+        {
+          "kind": "inline",
+          "value": "1"
+        },
+        {
+          "kind": "text",
+          "value": " and "
+        },
+        {
+          "kind": "inline",
+          "value": "2"
+        }
+      ],
+      "plainText": "Correct answer: Option (c) - Both 1 and 2",
+      "note": "PROD sample (pyq_papers answerExplanation, read-only 2026-11-11)."
+    },
+    {
+      "id": "prod-expl-DE",
+      "input": "Correct answer: Option (c) - $D = 1$, $E = 0$",
+      "segments": [
+        {
+          "kind": "text",
+          "value": "Correct answer: Option (c) - "
+        },
+        {
+          "kind": "inline",
+          "value": "D = 1"
+        },
+        {
+          "kind": "text",
+          "value": ", "
+        },
+        {
+          "kind": "inline",
+          "value": "E = 0"
+        }
+      ],
+      "plainText": "Correct answer: Option (c) - D = 1, E = 0",
+      "note": "PROD sample (pyq_papers answerExplanation, read-only 2026-11-11)."
+    },
+    {
+      "id": "prod-expl-option-26",
+      "input": "(a) $26$ ❌ – 26 would need green to be 3, but green is 10 - 5 = 5.",
+      "segments": [
+        {
+          "kind": "text",
+          "value": "(a) "
+        },
+        {
+          "kind": "inline",
+          "value": "26"
+        },
+        {
+          "kind": "text",
+          "value": " ❌ – 26 would need green to be 3, but green is 10 - 5 = 5."
+        }
+      ],
+      "plainText": "(a) 26 ❌ – 26 would need green to be 3, but green is 10 - 5 = 5.",
+      "note": "PROD sample (pyq_papers answerExplanation, read-only 2026-11-11)."
+    },
+    {
+      "id": "prod-expl-5-unicode-ops",
+      "input": "Correct answer: Option (a) - $5$  \n\nKey Points:  \n- Each lower number equals the upper number multiplied by one less than itself: 3 × 2 = 6, 8 × 7 = 56.",
+      "segments": [
+        {
+          "kind": "text",
+          "value": "Correct answer: Option (a) - "
+        },
+        {
+          "kind": "inline",
+          "value": "5"
+        },
+        {
+          "kind": "text",
+          "value": "  \n\nKey Points:  \n- Each lower number equals the upper number multiplied by one less than itself: 3 × 2 = 6, 8 × 7 = 56."
+        }
+      ],
+      "plainText": "Correct answer: Option (a) - 5  \n\nKey Points:  \n- Each lower number equals the upper number multiplied by one less than itself: 3 × 2 = 6, 8 × 7 = 56.",
+      "note": "PROD sample (pyq_papers answerExplanation, read-only 2026-11-11)."
+    },
+    {
+      "id": "prod-expl-frac-5-6",
+      "input": "Correct answer: Option (d) - $\\frac{5}{6}$  \n\nKey Points:  \n- Adding 5 to numerator and denominator of n/d changes",
+      "segments": [
+        {
+          "kind": "text",
+          "value": "Correct answer: Option (d) - "
+        },
+        {
+          "kind": "inline",
+          "value": "\\frac{5}{6}"
+        },
+        {
+          "kind": "text",
+          "value": "  \n\nKey Points:  \n- Adding 5 to numerator and denominator of n/d changes"
+        }
+      ],
+      "plainText": "Correct answer: Option (d) - 5/6  \n\nKey Points:  \n- Adding 5 to numerator and denominator of n/d changes",
+      "note": "PROD sample (pyq_papers answerExplanation, read-only 2026-11-11)."
+    },
+    {
+      "id": "prod-expl-mixed-percent",
+      "input": "Correct answer: Option (c) - $34 \\frac{2}{7}\\%$",
+      "segments": [
+        {
+          "kind": "text",
+          "value": "Correct answer: Option (c) - "
+        },
+        {
+          "kind": "inline",
+          "value": "34 \\frac{2}{7}\\%"
+        }
+      ],
+      "plainText": "Correct answer: Option (c) - 34 2/7%",
+      "note": "PROD sample (pyq_papers answerExplanation, read-only 2026-11-11)."
+    },
+    {
+      "id": "prod-expl-degree-group",
+      "input": "Correct answer: Option (c) - $108^{\\circ}$",
+      "segments": [
+        {
+          "kind": "text",
+          "value": "Correct answer: Option (c) - "
+        },
+        {
+          "kind": "inline",
+          "value": "108^{\\circ}"
+        }
+      ],
+      "plainText": "Correct answer: Option (c) - 108°",
+      "note": "PROD sample (pyq_papers answerExplanation, read-only 2026-11-11)."
+    },
+    {
+      "id": "prod-expl-degree-bare",
+      "input": "Correct answer: Option (b) - An angle less than $45^\\circ$ North of East",
+      "segments": [
+        {
+          "kind": "text",
+          "value": "Correct answer: Option (b) - An angle less than "
+        },
+        {
+          "kind": "inline",
+          "value": "45^\\circ"
+        },
+        {
+          "kind": "text",
+          "value": " North of East"
+        }
+      ],
+      "plainText": "Correct answer: Option (b) - An angle less than 45° North of East",
+      "note": "PROD sample (pyq_papers answerExplanation, read-only 2026-11-11)."
+    },
+    {
+      "id": "prod-expl-mixed-number-unit",
+      "input": "Correct answer: Option (d) - $1 \\frac{3}{4}$ m",
+      "segments": [
+        {
+          "kind": "text",
+          "value": "Correct answer: Option (d) - "
+        },
+        {
+          "kind": "inline",
+          "value": "1 \\frac{3}{4}"
+        },
+        {
+          "kind": "text",
+          "value": " m"
+        }
+      ],
+      "plainText": "Correct answer: Option (d) - 1 3/4 m",
+      "note": "PROD sample (pyq_papers answerExplanation, read-only 2026-11-11)."
+    },
+    {
+      "id": "prod-expl-frac-XY",
+      "input": "(b) $\\frac{X}{Y}$ ❌ – A smaller number divided by a larger one is always below 1.",
+      "segments": [
+        {
+          "kind": "text",
+          "value": "(b) "
+        },
+        {
+          "kind": "inline",
+          "value": "\\frac{X}{Y}"
+        },
+        {
+          "kind": "text",
+          "value": " ❌ – A smaller number divided by a larger one is always below 1."
+        }
+      ],
+      "plainText": "(b) X/Y ❌ – A smaller number divided by a larger one is always below 1.",
+      "note": "PROD sample (pyq_papers answerExplanation, read-only 2026-11-11)."
+    },
+    {
+      "id": "prod-expl-currency-billion",
+      "input": "- In mid-1991 foreign exchange reserves fell to barely a fortnight of imports, near $1.2 billion, triggering the balance-of-payments crisis.",
+      "segments": [
+        {
+          "kind": "text",
+          "value": "- In mid-1991 foreign exchange reserves fell to barely a fortnight of imports, near $1.2 billion, triggering the balance-of-payments crisis."
+        }
+      ],
+      "plainText": "- In mid-1991 foreign exchange reserves fell to barely a fortnight of imports, near $1.2 billion, triggering the balance-of-payments crisis.",
+      "note": "PROD sample (pyq_papers answerExplanation, read-only 2026-11-11). Currency, not maths."
+    },
+    {
+      "id": "prod-option-currency",
+      "input": "$40 billion",
+      "segments": [
+        {
+          "kind": "text",
+          "value": "$40 billion"
+        }
+      ],
+      "plainText": "$40 billion",
+      "note": "PROD sample (pyq_papers option, read-only 2026-11-11). Currency, not maths."
+    },
+    {
+      "id": "prod-stem-forex",
+      "input": "India's FOREX reserves crossed a historic high, standing at $110.48 billion as on December 19, 2003.",
+      "segments": [
+        {
+          "kind": "text",
+          "value": "India's FOREX reserves crossed a historic high, standing at $110.48 billion as on December 19, 2003."
+        }
+      ],
+      "plainText": "India's FOREX reserves crossed a historic high, standing at $110.48 billion as on December 19, 2003.",
+      "note": "PROD sample (pyq_papers stem, read-only 2026-11-11)."
+    },
+    {
+      "id": "prod-stem-in-dollars",
+      "input": "What was the approximate total value (in $) of sheet steel",
+      "segments": [
+        {
+          "kind": "text",
+          "value": "What was the approximate total value (in $) of sheet steel"
+        }
+      ],
+      "plainText": "What was the approximate total value (in $) of sheet steel",
+      "note": "PROD sample (pyq_papers stem, read-only 2026-11-11). $ followed by ) opens but never closes."
+    },
+    {
+      "id": "prod-stem-space-dollar",
+      "input": "China has spent $ 2.2 billion so far on the project.",
+      "segments": [
+        {
+          "kind": "text",
+          "value": "China has spent $ 2.2 billion so far on the project."
+        }
+      ],
+      "plainText": "China has spent $ 2.2 billion so far on the project.",
+      "note": "PROD sample (pyq_papers stem, read-only 2026-11-11)."
+    },
+    {
+      "id": "prod-stem-symbol-ops",
+      "input": "If $ means ‘divided by’; @ means ‘multiplied by’; # means ‘minus’,\nthen the value of 10#5@1$5 is",
+      "segments": [
+        {
+          "kind": "text",
+          "value": "If $ means ‘divided by’; @ means ‘multiplied by’; # means ‘minus’,\nthen the value of 10#5@1$5 is"
+        }
+      ],
+      "plainText": "If $ means ‘divided by’; @ means ‘multiplied by’; # means ‘minus’,\nthen the value of 10#5@1$5 is",
+      "note": "PROD sample (pyq_papers stem, read-only 2026-11-11). $ used as an operator symbol stays text."
+    },
+    {
+      "id": "prod-stem-relation-symbols",
+      "input": "M % N means M is the son of N. M @ N means M is the sister of N. M $ N means M is the father of N.",
+      "segments": [
+        {
+          "kind": "text",
+          "value": "M % N means M is the son of N. M @ N means M is the sister of N. M $ N means M is the father of N."
+        }
+      ],
+      "plainText": "M % N means M is the son of N. M @ N means M is the sister of N. M $ N means M is the father of N.",
+      "note": "PROD sample (pyq_papers stem, read-only 2026-11-11)."
+    },
+    {
+      "id": "prod-option-coding-hazard-1",
+      "input": "C%B$F$E",
+      "segments": [
+        {
+          "kind": "text",
+          "value": "C%B"
+        },
+        {
+          "kind": "inline",
+          "value": "F"
+        },
+        {
+          "kind": "text",
+          "value": "E"
+        }
+      ],
+      "plainText": "C%BFE",
+      "note": "PROD sample (pyq_papers option, read-only 2026-11-11). HAZARD: $ used as a coding symbol pairs into maths under v1; plain text changes the option."
+    },
+    {
+      "id": "prod-option-coding-hazard-2",
+      "input": "B$F$E%C",
+      "segments": [
+        {
+          "kind": "text",
+          "value": "B"
+        },
+        {
+          "kind": "inline",
+          "value": "F"
+        },
+        {
+          "kind": "text",
+          "value": "E%C"
+        }
+      ],
+      "plainText": "BFE%C",
+      "note": "PROD sample (pyq_papers option, read-only 2026-11-11). HAZARD (same option set)."
+    },
+    {
+      "id": "prod-option-coding-hazard-3",
+      "input": "E%B$F$C",
+      "segments": [
+        {
+          "kind": "text",
+          "value": "E%B"
+        },
+        {
+          "kind": "inline",
+          "value": "F"
+        },
+        {
+          "kind": "text",
+          "value": "C"
+        }
+      ],
+      "plainText": "E%BFC",
+      "note": "PROD sample (pyq_papers option, read-only 2026-11-11). HAZARD (same option set)."
+    },
+    {
+      "id": "prod-stem-escaped-brackets-hazard",
+      "input": "or any member of 21 \\[the Armed Forces of the Union\\] engaged on guard, sentry, patrol or other similar duty",
+      "segments": [
+        {
+          "kind": "text",
+          "value": "or any member of 21 \\[the Armed Forces of the Union\\] engaged on guard, sentry, patrol or other similar duty"
+        }
+      ],
+      "plainText": "or any member of 21 \\[the Armed Forces of the Union\\] engaged on guard, sentry, patrol or other similar duty",
+      "note": "PROD sample (pyq_papers stem, read-only 2026-11-11). Markdown-escaped brackets mid-sentence are text: \\[ \\] is line-anchored (ruling 21)."
+    },
+    {
+      "id": "prototype-name-control-word",
+      "input": "$\\constructor$",
+      "segments": [
+        {
+          "kind": "inline",
+          "value": "\\constructor"
+        }
+      ],
+      "plainText": "\\constructor",
+      "note": "B1f: a command name that is also an Object.prototype member is an UNKNOWN control word (source kept, §3.3). Implementations must look names up as own entries only, never via a bare object index (JS returned function source). The validator rejects it (stage 2: undefined control sequence)."
+    },
+    {
+      "id": "prototype-name-mathbb-arg",
+      "input": "$\\mathbb{toString}$",
+      "segments": [
+        {
+          "kind": "inline",
+          "value": "\\mathbb{toString}"
+        }
+      ],
+      "plainText": "toString",
+      "note": "B1f: \\mathbb with an argument outside N Z Q R C yields the raw argument (§3.4), even when the argument names an Object.prototype member."
+    }
+  ]
+}

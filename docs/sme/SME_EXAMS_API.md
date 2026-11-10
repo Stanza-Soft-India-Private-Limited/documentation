@@ -109,6 +109,12 @@ registry key after defaults + overrides + parent-off propagation (note `mains.*`
 went off without anyone listing the children). `effectiveFeatureCaps` is the global
 `app_config` limit map with this exam's overrides merged on top.
 
+Two more keys for per-language flags (§7.1): the raw `featureFlagsByLanguage`
+(`{"hi": {"mains": false}}`, usually `null`) and `effectiveFeatureFlagsByLanguage` — one full
+resolved map per **enabled non-English** language in the catalogue, e.g.
+`{"hi": {"prelims": true, "mains": false, "mains.modelAnswer": false, "…": true}}`. English is
+the base and is `effectiveFeatureFlags`; a catalogued-but-disabled language gets no entry.
+
 ### `GET /sme/exams/:id/content-counts`
 **Check this before switching an exam on.**
 
@@ -134,6 +140,17 @@ went off without anyone listing the children). `effectiveFeatureCaps` is the glo
 
 **`exclusive: 0` on a module you just loaded content into is the signature of a forgotten
 `examIds`** — those rows became UPSC content. Fix by re-sending them with the right tags.
+
+**`?language=<code>`** counts only rows written in that content language — the readiness
+numbers for one language before you switch a module on (or off) for it (§7.1). The body
+gains `"language": "<code>"`; every module row keeps its shape, and `enabled` is still the
+exam-level mirror. A code not in the language catalogue is a `400` (a disabled language is
+fine — content is prepared before launch). Without the param the body is unchanged.
+
+```json
+GET /sme/exams/upsc-cse/content-counts?language=hi
+{ "exam": "upsc-cse", "language": "hi", "modules": [ { "module": "prelims", "visible": 0, "shared": 0, "exclusive": 0, "enabled": true, "boardDeleted": 0 }, … ] }
+```
 
 ### `POST /sme/exams`
 
@@ -563,6 +580,54 @@ PATCH /sme/exams/appsc-group-1
   writing replica drops its cache immediately, so the operator sees it at once and the
   others converge.
 
+### 7.1 Per-language flags (`featureFlagsByLanguage`)
+
+The same switches, per **content language** — e.g. UPSC in Hindi with Mains and the prelims
+explanations not ready yet. English is the base (it is `featureFlags`); every other language
+can only **narrow** it.
+
+```json
+PATCH /sme/exams/upsc-cse
+{ "featureFlagsByLanguage": { "hi": { "mains": false, "prelims.explanation": false } } }
+```
+
+Stored shape: `{ "<code>": { "<registry key>": false, … }, … }` — the same registry keys
+as `featureFlags`, values only `false`; `null` = no language narrows anything.
+
+**The rule: effective(exam, language) = exam flag AND language override**, then parent-off
+propagation (a parent switched off for a language takes its children with it), then
+`alwaysOn`. Consequences:
+
+- A language can switch a feature **off**, never back **on**: an exam-level `false` stays
+  `false` in every language, whatever the language map says.
+- **`en` is a 400** ("English is the base; edit featureFlags").
+- **A code not in the language catalogue is a 400**; a catalogued-but-disabled language is
+  accepted, so flags can be set before the language launches.
+- **Partial and MERGED**, per language and per key: languages and keys you omit keep their
+  stored value; `true` **removes** that language's override for the key (back to the exam
+  flag); a language left with no overrides is dropped; `null` for the whole map means **no
+  change**, never "clear".
+- Keys are validated exactly like `featureFlags`: unknown key = 400 (same message),
+  `dashboard` cannot be switched off, a non-boolean is a 400.
+- **Flags only.** Caps, trial and pricing stay per exam, and so does the legacy
+  `enabledModules` mirror (1.8/1.9 clients never see language flags). The paywall's
+  generated comparison table also stays exam-level.
+- A write drops the same caches as `featureFlags` (~60 s convergence across replicas).
+
+**Which language decides.** The request's content language — the `X-Lang` header as
+resolved by the server (absent, `en`, unknown or disabled ⇒ `en`). `/config.features` is
+the per-language map for that language; every gate in §12 (`@Feature` routes, metered
+routes, `/quota/begin`, the content-section flags, daily tasks) uses it. A request without
+`X-Lang` — every shipped client and the web app today — resolves exactly as before. The
+learner sees a language-off feature exactly like an exam-off one: hidden from `/config`,
+and 403 `FEATURE_DISABLED` if called (the body then also names `language`, §12).
+
+**Not a bridge.** When a Hindi folder is empty the app already falls back to English rows;
+a language flag is for deliberately hiding a module in that language, not for filling gaps.
+
+**Readiness.** `GET /sme/exams/:id/content-counts?language=hi` (§2) shows how much content
+exists in that language per module.
+
 ### `enabledModules` is now a DERIVED MIRROR
 
 Every shipped 1.8/1.9/2.0 client parses `enabledModules`, and so does `content-counts`, so the
@@ -881,6 +946,10 @@ the UI only; the refusal below is the real gate.
   "method": "GET"
 }
 ```
+
+When the refusal was made for a non-English content language (`X-Lang: hi`), the body
+also carries **`"language": "hi"`** and the message ends `… for exam "upsc-cse" in language
+"hi".` A request without `X-Lang` (or `X-Lang: en`) gets exactly the body above.
 
 **403, deliberately not 402.** A 402 means "out of credits, buy premium" and opens the
 paywall; showing a paywall for a feature the exam does not have would be selling something
