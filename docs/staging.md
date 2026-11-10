@@ -717,3 +717,113 @@ production.
 - Confirm nothing was left switched off on `upsc-cse`: `featureFlags`, `featureCaps` and
   `paywallContent` must all still be `null`.
 - `git status` must be clean of anything you do not intend to ship — `mau` ships the tree.
+
+# 2026-11-11 maths + per-language flags: staging verification checklist
+
+What the math-text v1 work (contract: [`contracts/math-text-v1.md`](contracts/math-text-v1.md)) and the
+per-language feature flags must prove **on staging before the production deploy**. Same shorthand
+(`$STG`, `$KEY`, `$TOKEN`) as the 2026-09-17 checklist above. Use rows whose text starts with
+`[STAGING TEST]`; never write to production from this list. `mau` ships the working tree, so
+commit everything and confirm the running image through the API first (Step 0 above).
+
+```bash
+H='Content-Type: application/json'
+A="Authorization: Bearer $TOKEN"
+```
+
+### M1. Bad maths is a 400 `INVALID_MATH`
+
+```bash
+curl -sS -o /tmp/m1.json -w '%{http_code}\n' -X POST "$STG/api/v1/sme/content/pyq" \
+  -H "x-api-key: $KEY" -H "$H" -d @bad-math-row.json     # a valid row whose optionB is "$\\frac{a}{b$"
+jq '{code, field, span, message}' /tmp/m1.json
+```
+
+✅ **Expected:** `400`; `code: "INVALID_MATH"`, `field: "optionB"`, a `span` that starts at the
+`$`, and `message` of the form `optionB: <reason> near <span>`. Nothing is written
+(`SELECT count(*) FROM pyq_papers WHERE question LIKE '[STAGING TEST]%'` unchanged).
+
+### M2. Good maths is a 201
+
+```bash
+curl -sS -o /tmp/m2.json -w '%{http_code}\n' -X POST "$STG/api/v1/sme/content/pyq" \
+  -H "x-api-key: $KEY" -H "$H" -d @good-math-row.json    # stem "[STAGING TEST] Simplify $\\frac{a}{b}$ and \\$5."
+jq -r '.id // .data.id' /tmp/m2.json                      # note it as MATH_ID
+```
+
+✅ **Expected:** `201` and an id. Also create one maths-free row; note its id as PLAIN_ID.
+
+### M3. Old-client fallback by version and platform
+
+```bash
+for hdr in "X-App-Version: 2.2.0" "X-App-Version: 2.3.0" "" "X-Platform: web|X-App-Version: 2.3.0"; do
+  echo "== $hdr"
+  IFS='|' read -ra HS <<< "$hdr"; ARGS=(); for h in "${HS[@]}"; do [ -n "$h" ] && ARGS+=(-H "$h"); done
+  curl -sS -H "$A" "${ARGS[@]}" "$STG/api/v1/pyq/$MATH_ID/details" | jq -r '.question // .data.question'
+done
+```
+
+✅ **Expected, in order:** `2.2.0` → the stem as plain text (`Simplify a/b and $5.`, no delimiters);
+`2.3.0` → LaTeX unchanged (`Simplify $\frac{a}{b}$ and \$5.`); no header → plain text;
+`X-Platform: web` with `2.3.0` → LaTeX.
+
+### M4. A maths-free row is byte-identical across all four
+
+```bash
+for ARGS in "-H X-App-Version:2.2.0" "-H X-App-Version:2.3.0" "" "-H X-Platform:web -H X-App-Version:2.3.0"; do
+  curl -sS -H "$A" $ARGS "$STG/api/v1/pyq/$PLAIN_ID/details" | shasum -a 256
+done | sort -u | wc -l
+```
+
+✅ **Expected:** `1` (one distinct hash across the four requests).
+
+### M5. `/config` follows `X-Lang` after a Hindi flag
+
+```bash
+curl -sS -X PATCH "$STG/api/v1/sme/exams/upsc-cse" -H "x-api-key: $KEY" -H "$H" \
+  -d '{"featureFlagsByLanguage":{"hi":{"mains":false}}}' | jq '.featureFlagsByLanguage'
+sleep 65                                  # catalogue snapshot is 60 s PER REPLICA
+curl -sS -H "$A" -H 'X-Lang: hi' "$STG/api/v1/config" | jq '.features.mains'
+curl -sS -H "$A" "$STG/api/v1/config" | jq '.features.mains'
+```
+
+✅ **Expected:** PATCH echoes `{"hi":{"mains":false}}`; then `false` with `X-Lang: hi`, and `true`
+(unchanged) without the header.
+
+### M6. A Hindi-off module is a 403 carrying `language`
+
+```bash
+curl -sS -o /tmp/m6.json -w '%{http_code}\n' -H "$A" -H 'X-Lang: hi' "$STG/api/v1/mains/filters"
+jq '{code, feature, exam, language}' /tmp/m6.json
+curl -sS -o /dev/null -w '%{http_code}\n' -H "$A" "$STG/api/v1/mains/filters"
+```
+
+✅ **Expected:** `403`; `code: "FEATURE_DISABLED"`, `feature: "mains"`, `language: "hi"`. The same
+route without `X-Lang` is `200` and its body has no `language` key.
+
+### M7. `/quota/begin` honours the Hindi flag
+
+First switch a Dify-direct feature off for Hindi (the only kind `/quota/begin` gates), e.g. `{"featureFlagsByLanguage":{"hi":{"prelims.variation":false}}}`
+(wait 65 s), then:
+
+```bash
+curl -sS -o /tmp/m7.json -w '%{http_code}\n' -X POST "$STG/api/v1/quota/begin" \
+  -H "$A" -H "$H" -H 'X-Lang: hi' -d '{"feature":"pyq_variation"}'
+```
+
+✅ **Expected:** `403` with `code: "FEATURE_DISABLED"` and `language: "hi"`; the same call without
+`X-Lang` is a normal `200`/quota answer, and **no quota counter moved** for the refused call.
+
+### M8. Put it all back, then migrations
+
+```bash
+curl -sS -X PATCH "$STG/api/v1/sme/exams/upsc-cse" -H "x-api-key: $KEY" -H "$H" \
+  -d '{"featureFlagsByLanguage":{"hi":{"mains":true,"prelims.variation":true}}}' | jq '.featureFlagsByLanguage'
+npx ts-node -T scripts/staging-prisma.ts migrate status
+npx ts-node -T scripts/staging-prisma.ts migrate drift
+```
+
+✅ **Expected:** `featureFlagsByLanguage` is `null` (`true` removes each override and an empty
+language is dropped); `migrate status` reports the database schema is up to date including
+`20261111000000_feature_flags_by_language`; `drift` reports **no difference**. (A staging redeploy
+means these two commands are yours to run, unasked.)

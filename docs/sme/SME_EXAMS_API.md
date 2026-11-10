@@ -622,6 +622,38 @@ routes, `/quota/begin`, the content-section flags, daily tasks) uses it. A reque
 learner sees a language-off feature exactly like an exam-off one: hidden from `/config`,
 and 403 `FEATURE_DISABLED` if called (the body then also names `language`, §12).
 
+**A disabled language is ignored at read time.** A request whose `X-Lang` names a language that is
+not enabled resolves to `en`, so that language's overrides are never consulted; `effectiveFeatureFlagsByLanguage`
+has no entry for it. The stored overrides are kept and start to apply the moment the language is enabled.
+
+**Quick reference.**
+
+| You send | Result |
+|---|---|
+| `{"hi":{"mains":false}}` | Hindi learners lose Mains; English and every other language unchanged. |
+| `{"hi":{"mains":true}}` | Removes Hindi's `mains` override (back to the exam flag). Never re-enables an exam-level `false`. |
+| `{"en":{…}}` | 400 — edit `featureFlags` instead. |
+| `{"hi":{}}` | Nothing to merge; Hindi's existing overrides are kept. |
+| `"featureFlagsByLanguage": null` | No change (not "clear"). |
+
+Example (shape from code; live capture pending):
+
+```json
+PATCH /sme/exams/upsc-cse
+{ "featureFlagsByLanguage": { "hi": { "mains": false } } }
+```
+
+```json
+200
+{
+  "id": "upsc-cse",
+  "featureFlagsByLanguage": { "hi": { "mains": false } },
+  "effectiveFeatureFlagsByLanguage": {
+    "hi": { "prelims": true, "mains": false, "mains.evaluation": false, "mains.modelAnswer": false, "…": true }
+  }
+}
+```
+
 **Not a bridge.** When a Hindi folder is empty the app already falls back to English rows;
 a language flag is for deliberately hiding a module in that language, not for filling gaps.
 

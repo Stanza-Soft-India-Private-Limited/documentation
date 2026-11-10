@@ -138,3 +138,17 @@ B0 → {M0 spike ∥ W1 ∥ P1 ∥ B1 syntax half} → owner's go on the engine 
 
 ### Addendum B1g (2026-11-11) — ruling 17 as the engine's documented support
 The B1b prod audit showed the scored-suite allowlist rejecting standard KaTeX names the engine renders (`\tan` 28×, `\tau` 6×, `\max`, `\sup`) and strict mode rejecting Unicode symbols inside maths (`–`, `”`, `₹`; 11 fields). Orchestrator decision: stage 3 rejects only `MATH_ALLOWLIST_EXCLUDED` (macros, links/images/html, README-unsupported); the generated suite list stays as DATA for non-blocking `warnings` (logged at debug on writes, no response shape change); stage 2 ignores the strict codes `unknownSymbol`/`symbolNotInFont` (the engine's Unicode font fallback draws them). Genuine syntax errors still fail. Contract §4 updated; public signatures unchanged (other repos copy only segments/plain-text).
+
+### Addendum: Built (backend, e46727c..e5fa694)
+- `e46727c` B0 — math-text v1 contract, hand-computed vectors, this design spec.
+- `2b3b743` B1 syntax half — segment extractor, plain-text conversion, KaTeX-strict validator.
+- `3987a30` B1c — rulings 21/22: `\[…\]` line-anchored; hazards and authoring rules in the contract.
+- `10fc907` B1d — freeze the clock in the countSegment parity test (was flaky).
+- `6c25535` B1e — engine allowlist (RaTeX-CMP 0.1.14) as validation stage 3.
+- `49c325c` B2 — save-time maths validation on every question-text write, changed fields only.
+- `7a2c33f` B3 — opt-in old-client maths fallback, client-version util, back-compat probe.
+- `0efb465` B1b — read-only question-text maths audit script.
+- `d375660` B1f — table lookups are own-property only.
+- `c299fb1` B1g — stage 3 rejects only engine exclusions; Unicode symbols pass stage 2.
+- `e5fa694` B4 — per-language feature flags, narrowing only (migration `20261111000000_feature_flags_by_language`).
+- B5 (docs) and B6 (ingest scripts) follow this addendum.

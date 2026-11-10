@@ -1386,3 +1386,44 @@ already stored on one of the document's questions.
 `/sme/content/simulations/questions/bulk` and every `/cms/*/bulk` route are all-or-nothing:
 the first bad row is a `400` naming `items[<i>].<field>` and **nothing** is written.
 
+### 11.3 Writing maths — a guide for SMEs
+
+Plain language; the exact rules are in the [contract](../contracts/math-text-v1.md).
+
+**Delimiters.**
+
+| You want | Write | Notes |
+|---|---|---|
+| A formula inside a sentence | `$x^2 + 1$` or `\(x^2 + 1\)` | No space just inside the `$`: `$ x$` and `$x $` are NOT maths. |
+| A formula on its own | `$$\frac{a}{b}$$` | May span several lines. |
+| A formula on its own (alternative) | `\[` … `\]` | `\[` must be the first thing on its line and `\]` the last thing on its line. Mid-sentence `\[ … \]` is plain text (it is how legal text writes brackets). |
+| A literal dollar sign | `\$` | Always write currency as `\$5`, `\$24,000`. |
+
+**Currency.** `$` pairs with the next `$` on the same line. `Price $5 and area $x^2$` is read as ONE
+formula and breaks. Write `Price \$5 and area $x^2$`. A single `$5` with no second `$` on the line is
+plain text and accepted, but `\$` is always safe. The same goes for a `$` used as a symbol in a
+coding-decoding option: write `C%B\$F\$E`.
+
+**JSON.** Inside hand-written JSON a backslash must be doubled: `"\\frac{a}{b}"`. A single `"\frac"`
+becomes a form feed and is rejected (see below). Scripts that use `json.dumps` are safe.
+
+**What is rejected (400).** `INVALID_MATH`, in the shape of §11.2, with `field` and `span`:
+a form feed; `$$`, `\(` or `\[` opened and never closed, or with nothing inside; unbalanced `{ }`
+inside a formula; a formula KaTeX cannot parse (Devanagari or other Unicode letters inside a formula,
+`&` outside an alignment, `%` comments); a command the mobile engine does not support (`\def`,
+`\newcommand`, `\href`, `\url`, `\includegraphics`, `\html*`). On the bulk routes the field reads
+`items[<i>].<field>` (and the all-or-nothing bulk routes write nothing).
+
+**What only warns.** A command outside the engine's measured test suite is accepted; the server logs it
+and the response is unchanged. Unicode symbols such as `–`, `₹`, `”` inside a formula are fine.
+
+**Excel import.** The portal's import dialog pre-checks every row for the delimiter problems above
+(unclosed `$$` / `\(` / `\[`, unbalanced braces) and lists them before anything is posted; the server
+then repeats the full check and lists any row it still rejects.
+
+**Old app versions see readable text.** App versions below 2.3.0 (and any request with no
+`X-App-Version`) receive the maths converted to plain text, with the delimiters removed:
+`$\frac{a}{b}$` arrives as `a/b`, `$x^{2}$` as `x²`, `$\sqrt{x}$` as `√x`. Version 2.3.0 and newer (and
+web 2.3.0+) get the LaTeX and draw it. Text with no maths is identical for everyone. Check what an
+old phone will show with the plain-text column of
+[`math-vectors.json`](../contracts/math-vectors.json).
