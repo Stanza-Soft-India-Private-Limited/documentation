@@ -197,6 +197,7 @@ MERGED onto what is stored — never a wholesale replace):**
 | Field | Shape | Detail |
 |---|---|---|
 | `featureFlags` | `{ "<dotted key>": boolean }` | Partial. `false` switches a feature off; `true` **removes** the override. §7 |
+| `featureFlagsByLanguage` | `{ "<lang>": { "<dotted key>": boolean } }` | Added 2026-11-11. Partial per language; narrowing only (a language can switch a feature OFF, never on). `true` removes that override; `en` → 400 (English is the base = `featureFlags`). §7.1 |
 | `enabledModules` | `string[]` | Still accepted, now a **derived mirror** of the five module flags. §7 |
 | `featureCaps` | `{ "<capKey>": {type,limit} \| null }` | Partial. `null` drops that override back to the global limit. §8 |
 | `trialDays` | `0`–`90` | **New signups only.** Appends a dated entry to `trialPolicy`. §9 |
@@ -1082,7 +1083,7 @@ server-side rather than trusted to the client.
 
 | Endpoint | New key |
 |---|---|
-| `GET /config` | `features: Record<string, boolean>` — the full effective flag map for the request's exam. Advisory; an unknown key on the client means true. Read by 2.0 and later only. |
+| `GET /config` | `features: Record<string, boolean>` — the full effective flag map for the request's exam **and language** (`X-Lang`; since 2026-11-11 a per-language override can only narrow it, §7.1). Served at the bare path `/config`, outside the `api/v1` prefix. Advisory; an unknown key on the client means true. Read by 2.0 and later only. |
 | `GET /exams` | `logoUrl` (`""` when unset) and `accessTier` (`free`/`paid`) |
 | `GET /exams/:id` | the same two keys — it returns the identical `ExamResponseDto`, so anything true of a row in the list is true of the single fetch. |
 | `GET /user/profile/me` | `activeExamId` |
