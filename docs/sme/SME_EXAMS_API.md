@@ -636,7 +636,7 @@ has no entry for it. The stored overrides are kept and start to apply the moment
 | `{"hi":{}}` | Nothing to merge; Hindi's existing overrides are kept. |
 | `"featureFlagsByLanguage": null` | No change (not "clear"). |
 
-Example (shape from code; live capture pending):
+Example (live capture, staging 2026-11-11):
 
 ```json
 PATCH /sme/exams/upsc-cse
@@ -644,15 +644,24 @@ PATCH /sme/exams/upsc-cse
 ```
 
 ```json
-200
+200   — the RAW row, like every PATCH (no effective maps)
+{ "id": "upsc-cse", "featureFlagsByLanguage": { "hi": { "mains": false } }, "…": "…" }
+```
+
+```json
+GET /sme/exams/upsc-cse   — the effective view the portal renders
 {
-  "id": "upsc-cse",
   "featureFlagsByLanguage": { "hi": { "mains": false } },
   "effectiveFeatureFlagsByLanguage": {
-    "hi": { "prelims": true, "mains": false, "mains.evaluation": false, "mains.modelAnswer": false, "…": true }
+    "hi": { "prelims": true, "mains": false, "mains.evaluation": false,
+            "mains.modelAnswer": false, "mains.approach": false, "mains.research": false, "…": true }
   }
 }
 ```
+
+`effectiveFeatureFlagsByLanguage` lists every ENABLED non-English language in the catalogue,
+including ones with no override (they resolve identically to the exam). Read it back with GET
+after a PATCH; the PATCH body is the stored row only.
 
 **Not a bridge.** When a Hindi folder is empty the app already falls back to English rows;
 a language flag is for deliberately hiding a module in that language, not for filling gaps.
