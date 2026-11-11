@@ -128,7 +128,7 @@ B0 → {M0 spike ∥ W1 ∥ P1 ∥ B1 syntax half} → owner's go on the engine 
 4. **App size:** fonts/static lib measured in M0; reported before M2.
 5. **Portal must ship BEFORE SMEs author maths** (preview + inline errors), and the backend fallback must be LIVE before any maths row goes to prod — the rollout order above enforces it.
 6. **Search** on `/pyq` matches raw text (`\frac` is searchable, `½` is not) — accepted, noted in docs.
-7. **Hindi + maths rows** on staging for the drivers; prod Hindi content is still 0 rows.
+7. **Hindi + maths rows** on staging for the drivers. (Prod Hindi content was 0 rows when this was written; since 2026-11-11 evening UPSC prelims carries 1,100 `hi` rows with `prelims.explanation` off for `hi`.)
 8. **Psychometric** excluded; **content-doc body** gets maths free of charge, Lexical doc editor has no preview (freebie, documented).
 9. **Per-language flags are a ceiling, not a bridge:** the folder-level English fallback already shows English rows when a Hindi folder is empty; the new flag is for deliberately hiding a module (ruling 11).
 10. **Legacy `enabled_modules`** stays exam-level; 1.8/1.9 clients never see language flags.
