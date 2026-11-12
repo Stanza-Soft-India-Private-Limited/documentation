@@ -49,6 +49,7 @@ curl -X POST https://app.stanzasoft.ai/api/v1/wa-media/upload \
   `503 … AccessDenied` if the role lacks them — nothing is hidden.
 - Staging's task role cannot write to the bucket (known), so on staging only the
   page, the auth and the validation paths can be proven; uploads are proven on prod.
+- The "name already exists" check tries a signed HeadObject and, if the role may not HEAD (403), falls back to an anonymous HEAD on the public link — no permission needed, because the bucket serves every key publicly.
 - Bytes go through the API (multer, memory storage, 16 MB cap per request), unlike the
   SME presigned two-step — chosen because the uploader is a person with a browser, not
   a portal.
