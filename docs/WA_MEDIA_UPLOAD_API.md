@@ -44,9 +44,11 @@ curl -X POST https://app.stanzasoft.ai/api/v1/wa-media/upload \
 
 ## Operating notes
 
-- Production's ECS task role already has `s3:PutObject` on the bucket (that is how
-  question figures are uploaded). `ListBucket` / `DeleteObject` are reported as a
-  `503 … AccessDenied` if the role lacks them — nothing is hidden.
+- Production's ECS task role has `s3:PutObject` on the bucket (that is how question
+  figures are uploaded) but, as of 2026-11-12, NOT `ListBucket` or `DeleteObject`: on prod
+  `GET /wa-media` and `DELETE /wa-media/:name` answer `503 … AccessDenied` (nothing is
+  hidden), while upload + the public link work. Removal is therefore "ask the team" until
+  either the role gains those two actions or the API keeps its own index object.
 - Staging's task role cannot write to the bucket (known), so on staging only the
   page, the auth and the validation paths can be proven; uploads are proven on prod.
 - The "name already exists" check tries a signed HeadObject and, if the role may not HEAD (403), falls back to an anonymous HEAD on the public link — no permission needed, because the bucket serves every key publicly.
