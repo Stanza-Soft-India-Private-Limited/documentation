@@ -132,7 +132,7 @@ used. **Unknown keys open Home**, so older builds never crash on a key added lat
 | `survey` | ✅ survey id | — | the survey runner | Home |
 | `profile` | ➖ | — | Profile | — |
 | `my_account` | ➖ | — | My Account | — |
-| `my_activity` | ➖ | — | My Activity | — |
+| `my_activity` | ➖ | — | **My stats** (Activity path) where the path is available for the learner's exam; otherwise the old My Activity screen. ⚠️ Changed in the next release, see §4.1 | the old My Activity screen |
 | `notification_feed` | ➖ | — | notification feed (bell) | — |
 | `faq` | ➖ | — | FAQ | — |
 | `terms` | ➖ | — | Terms & Conditions | — |
@@ -150,6 +150,12 @@ used. **Unknown keys open Home**, so older builds never crash on a key added lat
 | `saved_mnemonics` | ➖ | — | saved mnemonics list | — |
 | `saved_reels` | ➖ | — | Updates / saved reels | — |
 | `simulation_review` | ✅ **attempt** id | `name` (display only) | that attempt's review | Library |
+| `activity_path` 🆕 | ➖ | — | Activity path screen, **My path** tab | — |
+| `activity_stats` 🆕 | ➖ | — | the same screen on the **My stats** tab | — |
+| `activity_journal` 🆕 | ➖ | — | the journal list | — |
+| `activity_score` 🆕 | ➖ | `subject` (a path subject key, e.g. `economy`; see [ACTIVITY_PATH_RULES.md](./ACTIVITY_PATH_RULES.md)) | the score screen, on that subject when given | the score screen's default subject |
+| `simulation_start` 🆕 | optional simulation id | — | no id: Library → Simulation tab. With id: **starts (or resumes) that timed simulation immediately** (unlike `simulation/<id>`, which only highlights it) | Library → Simulation tab |
+| `mock_test` 🆕 | ➖ | `subject`, `year`, `count` | the Practise mock-test screen with those choices | all subjects / all years / 10 questions |
 
 **URL-only spellings** (older shapes still live in shares and emails; checked before the table
 above, and **not** valid as push `type` values, where they open Home):
@@ -167,6 +173,39 @@ above, and **not** valid as push `type` values, where they open Home):
 
 Note the asymmetry: **`/open/pyq/<id>` is a question link**, but a push with `type: "pyq"`
 opens the tab. The same applies to `mains`.
+
+**Values containing `&` must be URL-encoded** (`%26`), in a link's query string and in
+`filterValue`/`subject`/`topic` generally: `Science & Technology` is
+`Science%20%26%20Technology`. The app splits the query on `&`, so an un-encoded subject is
+silently truncated (the app's tests pin this). Inside a push's `data.params` JSON no encoding
+is needed.
+
+### 4.1 Activity path and test links 🆕 (next release after 2.3, planned 2.4)
+
+The seven rows marked 🆕 or changed above ship in the **next release after 2.3 (planned
+2.4)**. **Older installs do not know these keys and treat them as unknown, so they open Home**
+(see the rule above the table). `my_activity` keeps opening the old My Activity screen there.
+The feature itself is described in [ACTIVITY_PATH_RULES.md](./ACTIVITY_PATH_RULES.md).
+
+| Key | Link form(s) | Accepted values | Feature flag (per exam) |
+|---|---|---|---|
+| `activity_path` | `/open/activity_path` | — | `dashboard.activityPath` |
+| `activity_stats` | `/open/activity_stats` | — | `dashboard.activityPath` |
+| `activity_journal` | `/open/activity_journal` | — | `dashboard.activityPath` |
+| `activity_score` | `/open/activity_score`, `/open/activity_score?subject=economy` (also `/open/activity_score/economy`) | `subject` = a path subject key from the rules; an unknown one is ignored and the screen shows its default subject | `dashboard.activityPath` |
+| `simulation_start` | `/open/simulation_start`, `/open/simulation_start/<simulation-id>` | id = a simulation id; an already-submitted one shows the server's "already attempted" state | `library.simulation` |
+| `mock_test` | `/open/mock_test?subject=History&year=2024&count=20` | `subject` = PYQ subject spelling; `year` = a four-digit paper year, an implausible one is dropped (all years); `count` = 10 to 100, clamped, absent or invalid = 10 | `prelims.mockTest` |
+| `my_activity` | `/open/my_activity` | — | not gated; the destination depends on `dashboard.activityPath` |
+
+- **`my_activity` changed:** where the Activity path is available for the learner's exam it now
+  opens **My stats**; where it is not, it opens the old My Activity screen as before. Profile's
+  "My Activity" row and the Home Journey tile follow the same rule.
+- **Feature off for the learner's exam:** the app shows a short "not available in <exam>" toast
+  and opens **Home**. Flags are per exam, so an APPSC link to a key that exam has off ends on
+  Home: check the target against the exam in `?exam=`.
+- **As a push `type`:** all of these work, with the same `id` and `params` (a push carries
+  `subject`/`year`/`count` in `data.params`). On installs older than the release above the push
+  opens Home.
 
 ---
 

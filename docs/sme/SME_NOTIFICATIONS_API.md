@@ -417,7 +417,7 @@ list needs *which subject*). Those take a **`params`** object alongside `type`:
 | `survey` | ✅ surveyId | — | the survey runner | Home | `/open/survey/<id>` |
 | `profile` | ➖ | — | Profile | — | `/open/profile` |
 | `my_account` | ➖ | — | My Account | — | `/open/my_account` |
-| `my_activity` | ➖ | — | My Activity (streak + reading) | — | `/open/my_activity` |
+| `my_activity` | ➖ | — | My stats (Activity path) where the path is available for the exam, else the old My Activity screen; the My stats behaviour ships after 2.3, see [DEEP_LINKS.md](./DEEP_LINKS.md) §4.1 | old My Activity | `/open/my_activity` |
 | `notification_feed` | ➖ | — | the in-app notification feed (bell) | — | `/open/notification_feed` |
 | `faq` | ➖ | — | FAQ | — | `/open/faq` |
 | `terms` | ➖ | — | Terms & Conditions | — | `/open/terms` |
@@ -435,6 +435,7 @@ list needs *which subject*). Those take a **`params`** object alongside `type`:
 | `saved_mnemonics` | ➖ | — | saved **mnemonics list** | — | `/open/saved_mnemonics` |
 | `saved_reels` | ➖ | — | saved reels / Updates list | — | `/open/saved_reels` |
 | `simulation_review` | ✅ **attemptId** | `name` | question-by-question review of that attempt | Library | `/open/simulation_review/<attemptId>` |
+| `activity_path`, `activity_stats`, `activity_journal`, `activity_score`, `simulation_start`, `mock_test` | see [DEEP_LINKS.md](./DEEP_LINKS.md) §4.1 | `subject` / `year` / `count` | Activity path (My path / My stats / journal / score), start a simulation, a mock test. Next release after 2.3 (planned 2.4); older installs open Home | Home | `/open/activity_stats` |
 
 **Param values that are validated, not passed through:**
 | param | used by | accepted | anything else |
