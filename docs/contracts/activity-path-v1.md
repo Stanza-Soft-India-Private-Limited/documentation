@@ -25,6 +25,11 @@ examples below were updated by hand, their `"rulesVersion"` values are as record
 **10** (Hindi only again): सफ़र (not यात्रा), "यह पल शेयर करें", "डायरी के नोट", the range label
 "इस हफ़्ते"; and a Hindi count phrase with a word that agrees with the number takes the singular at
 exactly 1 ("1 सवाल हल किया", "3 में से 1 पूरा", "पिछले 1 दिन में").
+Rules version **11** (owner ruling 2026-11-17, no shape change): **Phase 2 counts from the moment it
+begins** — a per-stage `countFrom` (see [Which activity a stage's goals count](#which-activity-a-stages-goals-count-rules-v11));
+the cleared footnote says "Your canvas starts at 0% for Phase 2" again; the Hindi `/stats` history
+line reads "चढ़ाई: पूरा हुआ • …" (no gender agreement with the stage name); and "Syllabus covered" is
+frozen per language (see [PhaseNumbers](#post-activity-pathprelims-result)).
 
 - **Auth:** JWT (global guard). **Gate:** `@Feature('dashboard.activityPath')` → `403 FEATURE_DISABLED`
   when the exam has the path switched off (migration `20261116000000` seeded it OFF for every exam).
@@ -108,7 +113,9 @@ not carry it, because the path screen does not show it.
 ## Semantics worth knowing
 
 - **Sticky:** a goal or step once earned stays done even if the number later drops (e.g. a streak ends).
-- **Catch-up:** history counts. One call advances through every step the data already satisfies.
+- **Catch-up:** history counts in a `lifetime` stage (The Ascent). One call advances through every
+  step the data already satisfies. A `stage_start` stage (The Summit, rules v11) counts only what
+  was done since it began — see the next section.
 - **The path does not depend on the streak** (owner ruling 2026-11-16, rules version 2). Former
   streak goals are now **active-day goals**: the number of distinct IST days on which the learner
   studied in this exam. A day counts if the learner did any of these in this exam that day:
@@ -164,6 +171,48 @@ not carry it, because the path screen does not show it.
 - **Mock links:** mock-test goals link to `/open/simulation_start` (no id: the Simulation list);
   the B7 calibration card links to `/open/simulation_start/<simulationId>` (starts that test). The
   mobile tree routes both (`DeepLinkTarget.TYPE_SIMULATION_START`); an app build without it opens Home.
+
+### Which activity a stage's goals count (rules v11)
+
+Owner ruling 2026-11-17: "Phase 2 must really start empty" (A); a Phase 1 restart after "didn't
+clear" keeps counting history (B). Each stage carries `countFrom`:
+
+- `lifetime` (default; **The Ascent**, including every restarted run): everything ever done in this exam.
+- `stage_start` (**The Summit**): only activity at or after the instant the learner's current run
+  of the stage began.
+
+**When a stage began.** For a stage entered by "Begin Phase 2", it is the `earned_at` of the
+completed stage's `stage` ledger row. That row is written in the same transaction that moves the
+progress row; `earned_at` = `CURRENT_TIMESTAMP` = that transaction's start. If no such row exists
+(e.g. a learner moved by support), the stage counts from `activity_path_progress.started_at` and the
+server logs a warning. It never silently counts lifetime. For a `stage_start` first stage (only by
+override), run 1 counts from `started_at` and run N from its restart row.
+
+**Only goals follow it.** Goals decide steps, camps, `chips.stagePercent` / `header.stagePercent`,
+the goal `progressText` and the camp hint (`gateText`). So on arrival they read "0 of 1 done" and
+"0 of 3 days (last 7 days)". Everything else stays **lifetime**: stars, titles, pillars and the
+`/score`, journal notes, `/stats` subjects and performance, "everything you built", phase numbers,
+and the smart slots (which subject is weakest is a lifetime fact).
+
+| goal type | what counts in a `stage_start` stage | known limit |
+|---|---|---|
+| `questions_attempted` | questions whose **latest** answer is at/after the start (PYQ: a question re-answered in the stage counts; library MCQ: its upserted row's `updated_at`) | library MCQs keep only the first and last answer, so a library question first answered before the start counts only if it was re-answered after |
+| `subject_accuracy` | the same questions, scored by that latest answer. This is the latest attempt among those made since the start | as above for library MCQs |
+| `topics_completed` | documents completed (`completed_at`, else `updated_at`) at/after the start, same folder-language rule as lifetime | a document completed before the start never counts again (completion is once per document) |
+| `active_days` (lifetime or `withinDays`) | IST days with activity **at/after the start instant**. The start day counts only if something happened after "Begin". A window reaching back before the start is clipped to it | a day's activity is known through the same upserted timestamps as lifetime (can under-count, never over-count) |
+| `mock_score` | the best mock **submitted** at/after the start | — |
+| `mains_evaluated` | evaluations created at/after the start | — |
+| `confidence_gap_cleared` | the verdict reads **lifetime** standing (a gap is a gap whenever the answers were given). But it is met only once the learner has `confidenceJudge.minAnswers` (20) answers in the subject since the start. Until then it reads "Answer N more questions to check", counting only fresh answers | a gap closed in Phase 1 needs 20 fresh answers to be confirmed |
+| `streak_days` (unused by defaults) | lifetime: the live streak | display-only streak system |
+
+Real run (throwaway Postgres, a veteran with 20 study days, 15 Mains evaluations, 32 topics, 2
+mocks; same data both ways), `/path` right after "Begin":
+- `lifetime` (pre-v11): `current summit.c2.s2`, `stagePercent 40`, `summit.c1` cleared (a camp celebration on arrival).
+- `stage_start` (v11): `current summit.c1.s1`, `stagePercent 0`, goals `0/1 "0 of 1 done"`,
+  `0/3 "0 of 3 days (last 7 days)"`, `0/1 "0 of 1 done"`, no goal/step/camp row, no camp celebration
+  (the stage title "The Mountaineer" still plays).
+- After one Mains evaluation, one History topic and one PYQ: mains `done`, `1/3 days`, topics `done`.
+  `/stats` stamps and history were unchanged.
 
 ### Camp numbers — one meaning per field
 
@@ -3664,7 +3713,7 @@ app shows only "Skip for now".
 | field | definition |
 |---|---|
 | `daysOnPath` | distinct IST study days in this exam, lifetime (the active-day definition) |
-| `syllabusCoveredPercent` | int \| null — the `/score` `topic_coverage` signal, rounded down; null when the learner was never active or the exam has no mapped study material |
+| `syllabusCoveredPercent` | int \| null — the `/score` `topic_coverage` signal in the **language rendered** (`X-Lang`), rounded down; null when the learner was never active or the exam has no mapped study material. Rules v11: frozen for **every** language when the stage ends (`stage` payload `syllabusByLanguage` {`en`, `hi`}), so the cleared screen, the `begin`/`restart` response, `/stats` `history` and the stage note all show the same figure in the same language (see below) |
 | `bestStreak` | `user_auth.max_streak`, **display only** |
 | `starsEarned` | subject stars held, lifetime |
 | `stagePercent`, `stepsDone`, `stepsTotal` | the stage's progress at that moment |
@@ -3682,8 +3731,24 @@ changed):**
 | `rebuilt` | not cleared, always | "Path rebuilt around your weak areas" / "Phase 1 starts again from Base Camp. Steps that target your weakest subjects follow what the calibration test exposes (or your practice accuracy if you skip it)…" — the mockup's "next 90 days" is dropped (no such horizon exists) |
 | `exam_date` | not cleared, only when `exams.exam_date` is **in the future** | "Countdown moves to the next exam" / "Your countdown now points to the next exam on May 23, 2027." — the exam date is exam-level config; the path never changes it, and no per-learner study plan exists to "recalibrate" |
 
-The cleared footnote says "Your canvas starts fresh for Phase 2" rather than "resets to 0%":
-history counts, so a learner can arrive with Phase 2 goals already met (see below).
+The cleared footnote (rules v11) is the design's line again: "Your canvas starts at 0% for Phase 2.
+All your stars, stamps and Phase 1 scores are saved and always visible in your journal." It is true
+because The Summit counts from "Begin" (`countFrom: 'stage_start'`). Rules v7–v10 said "starts
+fresh", because history counted then. An override that sets the next stage back to `lifetime`
+should also override `prelims.text.clearedFootnote`.
+
+**One syllabus figure (rules v11; device pass 2026-11-17).** The tester saw "12%" on the cleared
+screen and "0%" on the `/stats` history row for the same stage. Both are the same quantity, the
+`/score` `topic_coverage` signal. But that signal follows the roadmap's per-folder language rule:
+a folder counts its documents in the requested language when it has any, else English. On staging,
+each mapped folder has 1 Hindi document and 13–104 English ones. So the tester (both Polity
+documents done) was 12% under the Hindi roadmap (1 of 8) and 0% under the English one (about 1 of
+300). The screen was rendered in one language and "Begin" froze the figure of whatever language it
+was sent in. Now "Begin" and the restart freeze the figure for **every** language
+(`syllabusByLanguage`). Each place shows the figure of the language it renders in: cleared screen,
+`completed`/`restarted`, `/stats` history and the stage note's text per language. The note offers
+`{syllabusPercent}` only when the figure is ≥ `stageNotes.minSyllabusPercent` in both languages.
+Rows written before v11 carry one figure and keep showing it.
 
 ### POST /activity-path/begin-next-stage
 
@@ -3703,13 +3768,13 @@ and `applied: false`, and nothing written twice (proven on real Postgres). After
 
 Response: `stage` (as `/path` `stage`), `attempt`, `completed` HistoryEntry, `applied`, `serverDate`.
 
-**Stage 2 from day one.** Summit goals count **lifetime** history ("history counts", ruled for the
-whole path). Its active-day goals are windowed ("3 of the last 7 days"). `mains_evaluated` and
-`topics_completed` count everything ever done. So a learner who already has Mains evaluations
-or topics can meet Summit goals on arrival. Real run: Summit step 1 showed "0 of 1 done" (Mains)
-plus two goals already "Completed". If the first pass of the new stage clears several camps,
-only the highest celebrates (the rest are stamped seen, like a first-ever open). **Owner question
-— see the B7 report.**
+**Stage 2 from day one (rules v11, owner ruling 2026-11-17).** The Summit counts only activity from
+the moment "Begin" ran (its `stage` row's `earned_at`), so every learner arrives at 0%, with every
+goal at its zero state and nothing earned. Before v11, Summit goals counted lifetime history and a
+veteran arrived with goals already "Completed". See
+[Which activity a stage's goals count](#which-activity-a-stages-goals-count-rules-v11). If an
+override sets a next stage back to `lifetime` and its first pass clears several camps, only the
+highest celebrates (the rest are stamped seen, like a first-ever open).
 
 ### POST /activity-path/restart
 
@@ -3726,9 +3791,9 @@ In one transaction after the pass, it does five things:
 - pre-fills the slots, then runs the new run's first pass.
 
 **Nothing is deleted.** The ledger key includes `attempt`, so the old run's goal, step and camp rows
-stay. Stamps, stars, titles and notes stay. **History counts on the new run**: a strong learner
-re-clears the early steps on the next open (real run: Base Camp re-stamped as attempt 2, one
-celebration).
+stay. Stamps, stars, titles and notes stay. **History counts on the new run** (The Ascent is
+`lifetime`; owner ruling 2026-11-17 B left this unchanged in v11): a strong learner re-clears the
+early steps on the next open (real run: Base Camp re-stamped as attempt 2, one celebration).
 
 **"Weak subjects first" (calibration = done).** Every `weakest_subject` / `second_weakest_subject`
 goal of the stage is filled at the restart, in this order:
@@ -3754,23 +3819,30 @@ Postgres, also with an answer racing the restart). A later `/prelims-result` for
 
 **HistoryEntry** (`/stats` `history[]`, `completed`, `restarted`) — `kind` `"stage_completed"` \|
 `"stage_restarted"`, `stageKey`, `stageLabel`, `stageNumber`, `attempt` (the run that ended), `date`,
-`label` ("The Ascent completed • Nov 16, 2026"), `numbers` PhaseNumbers. All of it is read from the
-frozen ledger payload.
+`label` ("The Ascent completed • Nov 16, 2026"; Hindi since v11 "चढ़ाई: पूरा हुआ • 16 नवंबर 2026"
+— a status after a colon, so it never has to agree with the stage name's gender: चढ़ाई is
+feminine, शिखर masculine, and an SME may write any label), `numbers` PhaseNumbers. All of it is
+read from the frozen ledger payload. `numbers.syllabusCoveredPercent` is the frozen figure of the
+language rendered.
 
 ### B7 Example 1 — cleared, end to end (real responses, throwaway Postgres, en)
 
-Learner with 8 study days, 275 PYQ answers and Base Camp stamped (`seed-b7b`); rules override
-`{"prelims": {"resultDate": "2026-11-16"}, "calibrationSimulationId": "sim-cal"}`.
+Re-recorded under rules v11 (2026-11-17). A veteran with 20 study days, 550 PYQ answers, 32 topics
+completed, 2 submitted mocks and 15 Mains evaluations, all 1–20 days old; Camps 1–2 stamped
+(`b12/seed.sql`, learner `u_doc`). Rules override `{"prelims": {"resultDate": "2026-11-17"}}`. The
+syllabus figure is 50% under the English roadmap and 0% under the Hindi one (the seed's Hindi
+documents are not done). Because it is under the 50% floor in Hindi, the stage note takes the plain
+variant in both languages.
 
 `POST /activity-path/prelims-result {"result": "cleared"}`:
 
-<!-- example: prelims-result-response | rules v8 + override {resultDate, calibrationSimulationId} | veteran answers cleared, en (v7 recording; note updated by hand for v8) -->
+<!-- example: prelims-result-response | rules v11 + override {resultDate} | veteran answers cleared, en -->
 ```json
 {
   "result": "cleared",
-  "answeredDate": "2026-11-16",
+  "answeredDate": "2026-11-17",
   "changeable": true,
-  "serverDate": "2026-11-16",
+  "serverDate": "2026-11-17",
   "nextAction": "begin_next_stage",
   "cleared": {
     "title": "You made it through",
@@ -3780,40 +3852,40 @@ Learner with 8 study days, 275 PYQ answers and Base Camp stamped (`seed-b7b`); r
       {
         "key": "days",
         "label": "Days on the path",
-        "value": 8,
-        "text": "8"
+        "value": 20,
+        "text": "20"
       },
       {
         "key": "syllabus",
         "label": "Syllabus covered",
-        "value": 57,
-        "text": "57%"
+        "value": 50,
+        "text": "50%"
       },
       {
         "key": "best_streak",
         "label": "Best streak",
-        "value": 1,
-        "text": "1"
+        "value": 21,
+        "text": "21"
       },
       {
         "key": "stars",
         "label": "Subject stars earned",
-        "value": 10,
-        "text": "10"
+        "value": 12,
+        "text": "12"
       }
     ],
     "phaseNumbers": {
-      "daysOnPath": 8,
-      "syllabusCoveredPercent": 57,
-      "bestStreak": 1,
-      "starsEarned": 10,
-      "stagePercent": 16,
-      "stepsDone": 5,
+      "daysOnPath": 20,
+      "syllabusCoveredPercent": 50,
+      "bestStreak": 21,
+      "starsEarned": 12,
+      "stagePercent": 43,
+      "stepsDone": 13,
       "stepsTotal": 30,
-      "campsCleared": 1,
-      "stampsEarned": 1
+      "campsCleared": 2,
+      "stampsEarned": 2
     },
-    "note": "57% of the syllabus covered. Prelims was just the first gate, and you walked through it. The Summit is a different kind of climb. Let's go.",
+    "note": "You cleared Prelims. That is the gate that matters. The Summit is a different kind of climb, and we start it together.",
     "changesTitle": "What changes now",
     "changes": [
       {
@@ -3827,7 +3899,7 @@ Learner with 8 study days, 275 PYQ answers and Base Camp stamped (`seed-b7b`); r
         "body": "Unlocked • 3 new camps • Answer writing begins"
       }
     ],
-    "footnote": "Your canvas starts fresh for Phase 2, but all your stars, stamps and phase 1 scores are saved and always visible in your journal.",
+    "footnote": "Your canvas starts at 0% for Phase 2. All your stars, stamps and Phase 1 scores are saved and always visible in your journal.",
     "completedStage": {
       "key": "ascent",
       "label": "The Ascent",
@@ -3849,7 +3921,7 @@ Learner with 8 study days, 275 PYQ answers and Base Camp stamped (`seed-b7b`); r
 
 `POST /activity-path/begin-next-stage`:
 
-<!-- example: begin-next-stage-response | rules v7 + override | the same veteran taps Begin Phase 2 -->
+<!-- example: begin-next-stage-response | rules v11 + override {resultDate} | the same veteran taps Begin Phase 2 -->
 ```json
 {
   "stage": {
@@ -3866,35 +3938,250 @@ Learner with 8 study days, 275 PYQ answers and Base Camp stamped (`seed-b7b`); r
     "stageLabel": "The Ascent",
     "stageNumber": 1,
     "attempt": 1,
-    "date": "2026-11-16",
-    "label": "The Ascent completed • Nov 16, 2026",
+    "date": "2026-11-17",
+    "label": "The Ascent completed • Nov 17, 2026",
     "numbers": {
-      "daysOnPath": 8,
-      "syllabusCoveredPercent": 57,
-      "bestStreak": 1,
-      "starsEarned": 10,
-      "stagePercent": 16,
-      "stepsDone": 5,
+      "daysOnPath": 20,
+      "syllabusCoveredPercent": 50,
+      "bestStreak": 21,
+      "starsEarned": 12,
+      "stagePercent": 43,
+      "stepsDone": 13,
       "stepsTotal": 30,
-      "campsCleared": 1,
-      "stampsEarned": 1
+      "campsCleared": 2,
+      "stampsEarned": 2
     }
   },
   "applied": true,
-  "serverDate": "2026-11-16"
+  "serverDate": "2026-11-17"
 }
 ```
 
-Then `GET /path` (excerpt — every other key as in Example 1 of `/path`): `"stage": {"key":
-"summit", "number": 2}`, camps `summit.c1` current / `c2`, `c3` locked, `current.stepKey`
-`summit.c1.s1` with goals `mains_evaluated` "0 of 1 done", `active_days` "Completed",
-`topics_completed` "Completed", `"chips": {"stagePercent": 0, "starsEarned": 10, "starsTotal": 33}`,
-celebrations `the_star_collector` (still unseen from the first open) and **`the_mountaineer`**,
-`"prelims": {"promptDue": false, "canAnswer": false, "result": "cleared", "answeredDate":
-"2026-11-16", "changeable": false, "nextAction": null, …}`. `/stats` after: `header.stageLabel`
-"The Summit", `stagePercent` 0, `nextStageLabel` null; `stamps` still `[ascent.c1 (attempt 1)]`;
-`stars.earned` 10; `journal.total` 3 (was 2; `latest` = the stage note); `history` = [the
-`completed` entry above]. Every ledger row present before "Begin" was still there, unchanged.
+The `stage` row's payload also holds `"syllabusByLanguage": {"en": 50, "hi": 0}`. The same
+"Begin" sent with `X-Lang: hi` returns `"label": "चढ़ाई: पूरा हुआ • 17 नवंबर 2026"` and
+`syllabusCoveredPercent` 0 (the figure the Hindi cleared screen showed). `/stats` `history` shows
+50 in English and 0 in Hindi, whichever language "Begin" was sent in.
+
+Then `GET /path`. **The Summit at 0%**: every goal at its zero state, nothing earned, no camp
+celebration. The 15 Mains evaluations, 20 study days and 32 topics are all from before "Begin".
+The celebrations are `the_star_collector` (still unseen from the first open) and the stage title
+**`the_mountaineer`**:
+
+<!-- example: path-response | rules v11 + override {resultDate} | the same veteran right after Begin Phase 2 (Summit counts from the start), en -->
+```json
+{
+  "available": true,
+  "rulesVersion": 11,
+  "stage": {
+    "key": "summit",
+    "label": "The Summit",
+    "examPart": "mains",
+    "number": 2,
+    "totalStages": 2
+  },
+  "attempt": 1,
+  "camps": [
+    {
+      "key": "summit.c1",
+      "number": 1,
+      "label": "Answer Writing Camp",
+      "stampLabel": "First answers written",
+      "state": "current",
+      "gateText": null,
+      "steps": [
+        {
+          "key": "summit.c1.s1",
+          "number": 1,
+          "state": "current"
+        },
+        {
+          "key": "summit.c1.s2",
+          "number": 2,
+          "state": "locked"
+        },
+        {
+          "key": "summit.c1.s3",
+          "number": 3,
+          "state": "locked"
+        },
+        {
+          "key": "summit.c1.s4",
+          "number": 4,
+          "state": "locked"
+        },
+        {
+          "key": "summit.c1.s5",
+          "number": 5,
+          "state": "locked"
+        }
+      ]
+    },
+    {
+      "key": "summit.c2",
+      "number": 2,
+      "label": "Depth Camp",
+      "stampLabel": "Depth Camp reached",
+      "state": "locked",
+      "gateText": "10 Mains answers evaluated required",
+      "steps": [
+        {
+          "key": "summit.c2.s1",
+          "number": 1,
+          "state": "locked"
+        },
+        {
+          "key": "summit.c2.s2",
+          "number": 2,
+          "state": "locked"
+        },
+        {
+          "key": "summit.c2.s3",
+          "number": 3,
+          "state": "locked"
+        },
+        {
+          "key": "summit.c2.s4",
+          "number": 4,
+          "state": "locked"
+        },
+        {
+          "key": "summit.c2.s5",
+          "number": 5,
+          "state": "locked"
+        }
+      ]
+    },
+    {
+      "key": "summit.c3",
+      "number": 3,
+      "label": "The Peak",
+      "stampLabel": "Mains summit reached",
+      "state": "locked",
+      "gateText": null,
+      "steps": [
+        {
+          "key": "summit.c3.s1",
+          "number": 1,
+          "state": "locked"
+        },
+        {
+          "key": "summit.c3.s2",
+          "number": 2,
+          "state": "locked"
+        },
+        {
+          "key": "summit.c3.s3",
+          "number": 3,
+          "state": "locked"
+        },
+        {
+          "key": "summit.c3.s4",
+          "number": 4,
+          "state": "locked"
+        },
+        {
+          "key": "summit.c3.s5",
+          "number": 5,
+          "state": "locked"
+        }
+      ]
+    }
+  ],
+  "current": {
+    "campKey": "summit.c1",
+    "campNumber": 1,
+    "stepKey": "summit.c1.s1",
+    "stepNumber": 1,
+    "stepTitle": "Step 1",
+    "stepsInCamp": 5,
+    "tasksLeft": 3,
+    "goals": [
+      {
+        "key": "summit.c1.s1.mains",
+        "type": "mains_evaluated",
+        "title": "Get 1 Mains answer evaluated",
+        "progressText": "0 of 1 done",
+        "state": "in_progress",
+        "current": 0,
+        "target": 1,
+        "unit": "evaluations",
+        "link": "/open/mains"
+      },
+      {
+        "key": "summit.c1.s1.active",
+        "type": "active_days",
+        "title": "Study on 3 of the last 7 days",
+        "progressText": "0 of 3 days (last 7 days)",
+        "state": "in_progress",
+        "current": 0,
+        "target": 3,
+        "unit": "days",
+        "link": "/open/pyq"
+      },
+      {
+        "key": "summit.c1.s1.topics-history",
+        "type": "topics_completed",
+        "title": "Complete 1 topic in History",
+        "progressText": "0 of 1 done",
+        "state": "in_progress",
+        "current": 0,
+        "target": 1,
+        "unit": "topics",
+        "link": "/open/doc_list?subject=History"
+      }
+    ]
+  },
+  "stageComplete": false,
+  "chips": {
+    "stagePercent": 0,
+    "starsEarned": 12,
+    "starsTotal": 33
+  },
+  "celebrations": [
+    {
+      "id": "276ee78a-dde0-44e0-b547-aaf3ef513f43",
+      "kind": "title",
+      "key": "the_star_collector",
+      "title": "The Star Collector",
+      "body": "Earned 10 subject stars",
+      "number": null
+    },
+    {
+      "id": "ca4fdd32-485b-4b99-a4a9-2459dbc6cbc6",
+      "kind": "title",
+      "key": "the_mountaineer",
+      "title": "The Mountaineer",
+      "body": "Completed The Ascent",
+      "number": null
+    }
+  ],
+  "prelims": {
+    "promptDue": false,
+    "canAnswer": false,
+    "result": "cleared",
+    "answeredDate": "2026-11-17",
+    "resultDate": "2026-11-17",
+    "changeable": false,
+    "nextAction": null,
+    "prompt": {
+      "title": "Did you clear Prelims?",
+      "body": "The result is out. Let me know so I can set up the next phase of your Journey. Either way, your progress stays exactly where it is. Your Journey continues.",
+      "yesLabel": "Yes, I cleared Prelims",
+      "noLabel": "No, I didn't clear this time"
+    }
+  },
+  "serverDate": "2026-11-17"
+}
+```
+
+`/stats` after "Begin": `header` `{"title": "The Mountaineer", "stageLabel": "The Summit",
+"stagePercent": 0, "campNumber": 0, "stepsLeft": 5, "nextStageLabel": null, "dayNumber": 21, …}`;
+`stamps` still `[ascent.c1, ascent.c2]`; `stars.earned` 12 (unchanged); `history` = [the `completed`
+entry above]. Every ledger row present before "Begin" was still there, and the Summit run had no
+goal, step or camp row. After one Mains evaluation, one History topic and one PYQ answered after
+"Begin" (same learner `u_vet` in the run log): `summit.c1.s1.mains` done (1/1), `active` "1 of 3
+days (last 7 days)", `topics-history` done. Stamps and history were unchanged. Stars went 12 → 13
+(History: Solid) because stars are lifetime and the new topic counted.
 
 ### B7 Example 2 — not cleared, calibration taken, restart (real responses, en)
 

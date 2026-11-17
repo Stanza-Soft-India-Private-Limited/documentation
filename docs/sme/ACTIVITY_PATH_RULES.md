@@ -50,7 +50,7 @@ saved earlier keeps its own wording until you edit it.
 | `prelims.text` | rules version 7, optional: the Prelims-flow copy (39 keys since version 8, en + hi, merged **by key**), see §9 |
 | `calibrationSimulationId` | a simulation id or null — the calibration test offered after "did not clear" (§9) |
 | `subjects[]` | `{key, label{en,hi}, pyqSubject, roadmapSubjects[], mockSubjects?[]}`: how a path subject maps onto the PYQ spelling (accuracy), onto study-material folders (topics) and, since rules version 6, onto mock-test subjects (the confidence judge's two mock signals). `roadmapSubjects: []` = no study material: no topic goals possible, stars from questions only. `mockSubjects` absent / `[]` = no mock mapping: the mock signals are excluded for that subject |
-| `stages[]` → `camps[]` → `steps[]` → `goals[]` | the path. Keys must be unique; a goal key is a learner's permanent record, so **never reuse a key for a different goal** |
+| `stages[]` → `camps[]` → `steps[]` → `goals[]` | the path. Keys must be unique; a goal key is a learner's permanent record, so **never reuse a key for a different goal**. A stage is `{key, label, examPart, entry, countFrom?, camps}`; `countFrom` (rules version 11) is `lifetime` (default when absent) or `stage_start` — see **Which activity a stage's goals count** below |
 | `stars.levels` | exactly three per-subject levels: covered / solid / mastered (see **Star levels** below) |
 | `titles[]` | earned titles and when they unlock (see **Title conditions** in §6) |
 | `pillars` | the four score pillars (weights sum to 100; each pillar's inputs sum to 100) — see **Score pillars** below |
@@ -73,6 +73,38 @@ included, and must be at least `days`. Title placeholders: `{days}`, plus `{with
 with `/open/`, see [DEEP_LINKS.md](./DEEP_LINKS.md)) and optionally `lockedUntilOthersDone: true`
 (at most one per step, and it must be the last goal). A `slot` (`weakest_subject`,
 `second_weakest_subject`, `least_covered_subject`) is resolved per learner and then frozen.
+
+**Which activity a stage's goals count** (rules version 11, owner ruling 2026-11-17). The UPSC
+defaults set `countFrom` on each stage:
+- **The Ascent**: `lifetime`. Everything the learner ever did counts, so an existing learner may
+  open the path already past Camp 1. A restart after "did not clear" keeps counting history.
+- **The Summit**: `stage_start`. Only what the learner does from the moment they tap "Begin
+  Phase 2" counts, so Phase 2 opens at 0% for everyone.
+
+The moment is the `earned_at` of the `stage` ledger row that "Begin" writes, in the same
+transaction as the move. If that row is missing (a learner moved by hand), the stage counts from
+the learner's first path open (`activity_path_progress.started_at`), and the server logs a warning.
+
+Only **goals** follow `countFrom`, and through them the steps, camps, stage % and the progress
+wording. Stars, titles, pillars, the score, journal notes and the frozen phase numbers always count
+lifetime. So do the smart slots: which subject is weakest is a lifetime fact.
+
+| goal type | counts in a `stage_start` stage | known limit |
+|---|---|---|
+| `questions_attempted` | questions whose latest answer is at or after the stage start | library MCQs keep only the first and last answer per question |
+| `subject_accuracy` | the same questions, scored by that latest answer | as above |
+| `topics_completed` | documents completed at or after the stage start | a document done before the start never counts again |
+| `active_days` (with or without `withinDays`) | IST days with activity at or after the start; the "Begin" day counts only with activity after "Begin"; a window reaching back before the start is clipped to it | as lifetime: can under-count, never over-count |
+| `mock_score` | the best mock submitted at or after the start | — |
+| `mains_evaluated` | evaluations at or after the start | — |
+| `confidence_gap_cleared` | the judge's verdict on lifetime standing, met only once the learner has `confidenceJudge.minAnswers` (20) answers in that subject since the start ("Answer N more questions to check" until then) | a gap closed in Phase 1 needs 20 fresh answers to be confirmed |
+| `streak_days` | lifetime (the live streak) | not used by the defaults |
+
+Setting a stage back to `lifetime`
+(`PATCH {"override": {"stages": [{"key": "summit", "countFrom": "lifetime"}]}}`) restores the
+pre-v11 behaviour: a veteran can arrive with Summit goals already met. Also override
+`prelims.text.clearedFootnote`, which promises "Your canvas starts at 0% for Phase 2". Changing
+`countFrom` never deletes anything: goals, steps and camps already earned stay earned.
 
 **Star levels** (rules version 3): each level is
 `{level, key, label{en,hi}, description?{en,hi}, minCoveragePercent, minAccuracyPercent, minAnswers, requireNoConfidenceGap, minReviewDays?, minMockPercent?}`.
@@ -251,7 +283,7 @@ Example:
 |---|---|
 | `version`, `calibrationSimulationId`, `prelims.resultDate` | replaced by field |
 | `prelims.text` | **by key** (send one line, the other keys stay) |
-| `stages` → `camps` | **by key**: a stage or camp you send is patched field by field (`label`, `title`, `stamp`, …); its child list merges by key too |
+| `stages` → `camps` | **by key**: a stage or camp you send is patched field by field (`label`, `examPart`, `entry`, `countFrom`, `title`, `stamp`, …); its child list merges by key too. `{"stages": [{"key": "summit", "countFrom": "lifetime"}]}` changes only that field |
 | `steps`, `subjects`, `titles` | **by key, replaced WHOLE**: send the complete item. A step's goals are one unit, because their order and the locked-last rule only make sense together |
 | new keys | appended in the order sent |
 | `{ "key": "...", "remove": true }` | deletes that item. Removing a key that exists nowhere is a `400`: a typo must not silently do nothing |
@@ -528,12 +560,16 @@ exam on …"). Keep it current as usual (`PATCH /sme/exams/:id`).
 - **"Yes" + Begin**: a `stage` ledger row is written with the Phase 1 numbers frozen (days on the
   path, syllabus %, best streak, stars, stage %). A `stage_cleared` journal note is written, and the
   learner moves to the next stage in the same run. They do not need to have finished every Phase 1
-  step. "Completed The Ascent" titles are earned.
+  step. "Completed The Ascent" titles are earned. Since rules version 11 The Summit counts from
+  this moment (`countFrom: stage_start`), so it opens at 0%. The syllabus % is frozen for every
+  language, because the roadmap counts documents per language (a folder with any Hindi document
+  is counted in Hindi for a Hindi reader). The cleared screen, My stats history and the journal
+  note each show the figure of the language they are read in.
 - **"No" + restart**: a `stage` row is written with the numbers and the calibration frozen. A
   `stage_restart` note is written. The learner starts run `attempt + 1` of Phase 1 from Base Camp.
   When the calibration test was taken, the "weakest subject" steps are filled from it. Nothing is
-  deleted: stamps, stars, titles and journal notes all stay. History counts, so earlier work
-  re-clears the early steps. On the "No" screen, "Current camp position" is the number of camps
+  deleted: stamps, stars, titles and journal notes all stay. History counts (The Ascent is
+  `lifetime`; unchanged by the version 11 ruling), so earlier work re-clears the early steps. On the "No" screen, "Current camp position" is the number of camps
   reached in this run under the current rules — the same number My stats shows as "Camp N" ("Camp 0
   • On the way to Base Camp" = `prelims.text.keptCampNoneValue`) — and "Stamps" counts every stamp
   ever earned. After a rule edit the two can differ; each keeps its own meaning (rules version 8).
@@ -564,8 +600,14 @@ WHERE user_id = '<user id>' AND exam_id = 'upsc-cse';
 
 The `stage` ledger row stays as history (`/stats` `history` keeps listing it) and so does the title.
 If the learner then answers "No" and restarts **in the same run**, the restart's `stage` row would
-collide with that kept row and be skipped, so their history would miss the restart. Tell
-engineering before doing this.
+collide with that kept row and be skipped, so their history would miss the restart. Likewise, if
+they tap "Begin" again in the same run, the kept row is not rewritten. The Summit then counts from
+the **first** "Begin", not the second (rules version 11). Tell engineering before doing this.
+
+**Moving a learner INTO The Summit by hand** (`SET stage = 'summit'` with no "Begin") leaves no
+`stage` row to say when Phase 2 began. Their Summit goals then count from their first path open
+(`started_at`), not from the move, and the server logs a warning on every open. Ask engineering to
+use the "Begin" flow instead.
 
 **After a restart**, the run number has moved on. Setting `attempt` back is not supported: the
 ledger is keyed by attempt. Leave the learner on the new run. If they did clear, they can answer
